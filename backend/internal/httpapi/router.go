@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/VaudKK/shield/backend/internal/auth"
+	"github.com/VaudKK/shield/backend/internal/ratelimit"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -16,6 +18,12 @@ type Server struct {
 	Pool   *pgxpool.Pool
 	Logger *slog.Logger
 	Env    string
+
+	Auth *auth.Service
+
+	// AuthRateLimiter throttles the unauthenticated auth endpoints
+	// (register/login), which are the most attractive brute-force targets.
+	AuthRateLimiter ratelimit.Limiter
 
 	AllowedOrigins []string
 	Version        string
@@ -40,6 +48,17 @@ func (s *Server) Router() http.Handler {
 	r.Get("/health", s.handleHealth)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/auth", func(r chi.Router) {
+			r.With(rateLimit(s.AuthRateLimiter, "AUTH_RATE_LIMITED")).Post("/register", s.handleRegister)
+			r.With(rateLimit(s.AuthRateLimiter, "AUTH_RATE_LIMITED")).Post("/login", s.handleLogin)
+
+			r.Group(func(r chi.Router) {
+				r.Use(s.requireAuth)
+				r.Get("/me", s.handleMe)
+				r.With(requireCSRF).Post("/logout", s.handleLogout)
+			})
+		})
+
 		// Evidence, disclosure, and audit routes are added in later phases.
 	})
 

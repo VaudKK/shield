@@ -11,8 +11,9 @@ violence, harassment, corruption, or other incidents.
 
 ## Status
 
-This repository is being built in phases. **Phase 1 (Foundation) is complete.**
-See [Development approach](#development-approach) below for what's implemented
+This repository is being built in phases. **Phases 1–2 (Foundation,
+Authentication & Security) are complete.** See
+[Development approach](#development-approach) below for what's implemented
 and what's next.
 
 ## Problem
@@ -84,21 +85,42 @@ classification, OpenAI Responses API for evidence analysis.
 
 ## Security architecture
 
-- Every write path is designed to go through: auth → rate limiting → request
-  size validation → file type / magic byte validation → quarantine storage →
-  security scan, before any content is trusted (Phase 2–3).
+- **Authentication:** email/password with bcrypt (cost 12). Sessions are
+  server-side records in PostgreSQL, referenced by an opaque random token
+  (never the DB primary key) stored in an `HttpOnly`, `SameSite=Lax` cookie
+  (`Secure` in production); only a SHA-256 hash of the token is persisted,
+  so a database leak alone doesn't yield usable sessions. Login failures for
+  unknown vs. known emails take the same code path and roughly the same time,
+  so responses don't reveal which emails are registered.
+- **CSRF:** a double-submit token pattern — a second, non-`HttpOnly` cookie
+  whose value must be echoed in an `X-CSRF-Token` header on state-changing
+  authenticated requests — backs `SameSite=Lax` as defense in depth.
+- **Rate limiting:** a per-IP token-bucket limiter (`internal/ratelimit`,
+  interface-based so a Redis-backed implementation can be swapped in for
+  multi-instance deployments) guards `/auth/register` and `/auth/login`.
+  This is a defense-in-depth layer, not a substitute for a DDoS/WAF layer
+  such as Cloudflare in front of production — see the note in
+  `internal/httpapi/middleware_ratelimit.go`.
+- **Request validation:** JSON bodies are size-limited (1 MiB), decoded with
+  unknown fields rejected, and validated field-by-field before touching the
+  database.
+- Every evidence write path is designed to go through: auth → rate limiting →
+  request size validation → file type / magic byte validation → quarantine
+  storage → security scan, before any content is trusted (Phase 3).
 - Original evidence files are stored privately; nothing is served via
   permanent public URLs. Short-lived signed URLs are used where access is
   required (Phase 3).
 - SHA-256 hashing on ingestion proves whether the *stored file* changed after
   upload — it is never presented as proof that the underlying evidence itself
   is authentic.
-- Structured logging never includes raw evidence content, passwords, tokens,
-  API keys, or sensitive PII.
+- Structured logging never includes raw evidence content, passwords, session
+  tokens, API keys, or sensitive PII.
 - Secrets are only ever read from environment variables and are never
   committed to the repository.
-- Application-level rate limiting (Phase 2) is a defense-in-depth layer, not a
-  substitute for a DDoS/WAF layer such as Cloudflare in front of production.
+- Security headers (`X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`) are set on every response; CORS is restricted to the
+  configured origin allowlist with credentials enabled only for that
+  allowlist.
 
 ## AI architecture
 
@@ -114,7 +136,8 @@ OpenAI API key is a backend-only secret and is never exposed to the frontend.
 ### Prerequisites
 
 - Node.js 20+
-- Go 1.24+
+- Go 1.24+ (the module targets a newer point release; `go build`/`go test`
+  fetch that toolchain automatically on first use via `GOTOOLCHAIN=auto`)
 - Docker (for PostgreSQL, and optionally the full stack)
 
 ### Quick start with Docker Compose
@@ -123,8 +146,11 @@ OpenAI API key is a backend-only secret and is never exposed to the frontend.
 docker compose up --build
 ```
 
-This starts PostgreSQL and the Go API (which applies migrations on boot) at
-`http://localhost:8080`. Then run the frontend separately:
+This starts PostgreSQL (on host port `5433`, to avoid clashing with a
+locally installed Postgres on the default `5432` — the backend container
+always talks to it internally at `postgres:5432`) and the Go API, which
+applies migrations on boot, at `http://localhost:8080`. Then run the
+frontend separately:
 
 ```bash
 cd frontend
@@ -185,7 +211,24 @@ applied automatically, in order, on every server startup, and recorded in a
 `schema_migrations` table so each migration runs exactly once.
 
 To add a migration, create a new numbered `.sql` file in that directory and
-restart the server (or redeploy).
+restart the server (or redeploy). So far: `0001_init.sql` (extensions,
+`users`), `0002_sessions.sql` (server-side session store).
+
+## Running tests
+
+```bash
+cd backend
+go test ./...
+```
+
+Most tests are pure unit tests and need nothing running. The auth flow and
+CSRF/rate-limit integration tests additionally run against a real Postgres
+when `TEST_DATABASE_URL` is set (they `t.Skip` otherwise):
+
+```bash
+docker compose up -d postgres
+TEST_DATABASE_URL="postgres://shield:shield@localhost:5433/shield?sslmode=disable" go test ./...
+```
 
 ## S3 setup
 
@@ -219,9 +262,13 @@ Integration lands in Phase 5.
 
 Implemented so far:
 
-| Method | Path | Description |
-| --- | --- | --- |
-| `GET` | `/health` | Liveness/readiness check, including database connectivity |
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| `GET` | `/health` | — | Liveness/readiness check, including database connectivity |
+| `POST` | `/api/v1/auth/register` | — (rate-limited) | Create an account, start a session |
+| `POST` | `/api/v1/auth/login` | — (rate-limited) | Authenticate, start a session |
+| `GET` | `/api/v1/auth/me` | session | Current user |
+| `POST` | `/api/v1/auth/logout` | session + CSRF | End the current session |
 
 The full planned surface (evidence, timeline, PII, redaction, disclosures,
 audit) is documented as it's implemented in later phases; see the phase plan
@@ -259,7 +306,11 @@ check, doc updates, and a commit before moving on.
       backend, PostgreSQL connection, embedded SQL migrations, environment
       configuration, `/health` endpoint, basic dashboard shell, Docker
       Compose, README.
-- [ ] Phase 2 — Authentication & security
+- [x] **Phase 2 — Authentication & security:** email/password auth with
+      bcrypt, server-side sessions in PostgreSQL via `HttpOnly` cookies,
+      double-submit CSRF protection, per-IP rate limiting on `/auth/*`,
+      request validation, security headers. Tests cover the middleware and
+      the full register → login → logout flow against a real database.
 - [ ] Phase 3 — Evidence upload
 - [ ] Phase 4 — Content safety (NudeNet)
 - [ ] Phase 5 — OCR & AI

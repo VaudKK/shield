@@ -7,7 +7,10 @@ services:
       POSTGRES_PASSWORD: shield
       POSTGRES_DB: shield
     ports:
-      - '5432:5432'
+      # Host port 5433 avoids clashing with a locally installed Postgres on
+      # the default 5432. The backend container always talks to this
+      # service over the internal network at postgres:5432 regardless.
+      - '5433:5432'
     volumes:
       - shield_postgres_data:/var/lib/postgresql/data
     healthcheck:

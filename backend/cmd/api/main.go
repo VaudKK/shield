@@ -11,9 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/VaudKK/shield/backend/internal/auth"
 	"github.com/VaudKK/shield/backend/internal/config"
 	"github.com/VaudKK/shield/backend/internal/db"
 	"github.com/VaudKK/shield/backend/internal/httpapi"
+	"github.com/VaudKK/shield/backend/internal/ratelimit"
+	"github.com/VaudKK/shield/backend/internal/repository"
 )
 
 var version = "dev"
@@ -48,12 +51,23 @@ func run(logger *slog.Logger) error {
 	}
 	logger.Info("migrations applied")
 
+	authService := auth.NewService(
+		repository.NewUserRepository(pool),
+		repository.NewSessionRepository(pool),
+	)
+
+	// 10 requests per minute per IP, with a small burst allowance — enough
+	// for a real user retrying a typo, tight enough to slow brute forcing.
+	authLimiter := ratelimit.NewInMemoryLimiter(10, time.Minute, 5)
+
 	server := &httpapi.Server{
-		Pool:           pool,
-		Logger:         logger,
-		Env:            cfg.Env,
-		AllowedOrigins: cfg.CORSAllowedOrigins,
-		Version:        version,
+		Pool:            pool,
+		Logger:          logger,
+		Env:             cfg.Env,
+		Auth:            authService,
+		AuthRateLimiter: authLimiter,
+		AllowedOrigins:  cfg.CORSAllowedOrigins,
+		Version:         version,
 	}
 
 	httpServer := &http.Server{
