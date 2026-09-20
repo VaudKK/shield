@@ -19,4 +19,8 @@ type Storage interface {
 	// PresignGet returns a time-limited URL for reading the object at key.
 	// It never returns a permanent public URL.
 	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+
+	// GetObject reads the object at key back into memory. Used internally
+	// (e.g. for OCR) — never exposed directly to clients.
+	GetObject(ctx context.Context, key string) ([]byte, error)
 }

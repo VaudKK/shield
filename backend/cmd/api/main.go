@@ -11,12 +11,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/VaudKK/shield/backend/internal/ai"
+	"github.com/VaudKK/shield/backend/internal/analysis"
 	"github.com/VaudKK/shield/backend/internal/auth"
 	"github.com/VaudKK/shield/backend/internal/config"
 	"github.com/VaudKK/shield/backend/internal/contentsafety"
 	"github.com/VaudKK/shield/backend/internal/db"
 	"github.com/VaudKK/shield/backend/internal/evidence"
 	"github.com/VaudKK/shield/backend/internal/httpapi"
+	"github.com/VaudKK/shield/backend/internal/ocr"
 	"github.com/VaudKK/shield/backend/internal/ratelimit"
 	"github.com/VaudKK/shield/backend/internal/repository"
 	"github.com/VaudKK/shield/backend/internal/storage"
@@ -67,6 +70,9 @@ func run(logger *slog.Logger) error {
 	// adding several pieces of evidence in a row.
 	uploadLimiter := ratelimit.NewInMemoryLimiter(20, time.Minute, 10)
 
+	// 10 analysis runs per minute per IP — each one is a real OpenAI call.
+	analysisLimiter := ratelimit.NewInMemoryLimiter(10, time.Minute, 5)
+
 	objectStorage, err := storage.NewS3Storage(ctx, storage.S3Config{
 		Endpoint:  cfg.S3Endpoint,
 		Region:    cfg.S3Region,
@@ -93,16 +99,42 @@ func run(logger *slog.Logger) error {
 		classifier,
 	)
 
+	ocrService := ocr.NewCompositeService(
+		ocr.NewTesseractService(),
+		ocr.NewPDFTextService(),
+	)
+
+	var aiService ai.Service
+	if cfg.OpenAIAPIKey != "" {
+		aiService = ai.NewOpenAIService(cfg.OpenAIAPIKey, cfg.OpenAIModel)
+	} else {
+		logger.Warn("OPENAI_API_KEY not set; evidence analysis will run OCR and PII detection only")
+	}
+
+	analysisService := analysis.NewService(
+		repository.NewEvidenceRepository(pool),
+		repository.NewEvidenceFileRepository(pool),
+		repository.NewAuditRepository(pool),
+		repository.NewAnalysisRepository(pool),
+		repository.NewTimelineRepository(pool),
+		repository.NewPIIRepository(pool),
+		objectStorage,
+		ocrService,
+		aiService,
+	)
+
 	server := &httpapi.Server{
-		Pool:              pool,
-		Logger:            logger,
-		Env:               cfg.Env,
-		Auth:              authService,
-		Evidence:          evidenceService,
-		AuthRateLimiter:   authLimiter,
-		UploadRateLimiter: uploadLimiter,
-		AllowedOrigins:    cfg.CORSAllowedOrigins,
-		Version:           version,
+		Pool:                pool,
+		Logger:              logger,
+		Env:                 cfg.Env,
+		Auth:                authService,
+		Evidence:            evidenceService,
+		Analysis:            analysisService,
+		AuthRateLimiter:     authLimiter,
+		UploadRateLimiter:   uploadLimiter,
+		AnalysisRateLimiter: analysisLimiter,
+		AllowedOrigins:      cfg.CORSAllowedOrigins,
+		Version:             version,
 	}
 
 	httpServer := &http.Server{

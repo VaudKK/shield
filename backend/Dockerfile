@@ -1,12 +1,21 @@
-FROM golang:1.26-alpine AS build
+FROM golang:1.26-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libtesseract-dev \
+    libleptonica-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/api ./cmd/api
+RUN CGO_ENABLED=1 go build -o /out/api ./cmd/api
 
-FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/api /usr/local/bin/api
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/api"]

@@ -50,10 +50,11 @@ func newTestServer(t *testing.T) *httpapi.Server {
 			repository.NewUserRepository(pool),
 			repository.NewSessionRepository(pool),
 		),
-		AuthRateLimiter:   ratelimit.NewInMemoryLimiter(1000, time.Minute, 1000),
-		UploadRateLimiter: ratelimit.NewInMemoryLimiter(1000, time.Minute, 1000),
-		AllowedOrigins:    []string{"http://localhost:5173"},
-		Version:           "test",
+		AuthRateLimiter:     ratelimit.NewInMemoryLimiter(1000, time.Minute, 1000),
+		UploadRateLimiter:   ratelimit.NewInMemoryLimiter(1000, time.Minute, 1000),
+		AnalysisRateLimiter: ratelimit.NewInMemoryLimiter(1000, time.Minute, 1000),
+		AllowedOrigins:      []string{"http://localhost:5173"},
+		Version:             "test",
 	}
 }
 

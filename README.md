@@ -11,9 +11,9 @@ violence, harassment, corruption, or other incidents.
 
 ## Status
 
-This repository is being built in phases. **Phases 1–4 (Foundation,
-Authentication & Security, Evidence Upload, Content Safety) are complete.**
-See
+This repository is being built in phases. **Phases 1–5 (Foundation,
+Authentication & Security, Evidence Upload, Content Safety, OCR & AI) are
+complete.** See
 [Development approach](#development-approach) below for what's implemented
 and what's next.
 
@@ -47,9 +47,9 @@ flowchart LR
     subgraph Shield Backend
         API[Go + Chi API]
         SEC[Security Gate\nauth, rate limit, validation]
-        AI[AI Service\nOpenAI Responses API]
-        OCR[OCR Service]
-        PII[PII Detection]
+        OCR[OCR Service\nTesseract + PDF text]
+        PII[PII Detection\nregex + AI]
+        AISVC[AI Analysis Service]
     end
 
     NN[NudeNet\nPython sensitive-content service]
@@ -59,13 +59,13 @@ flowchart LR
 
     FE -- REST /api/v1 --> API
     API --> SEC
-    SEC --> AI
     SEC --> OCR
-    SEC --> PII
+    OCR --> PII
+    PII --> AISVC
     API --> PG
     API --> S3
     API -- classification --> NN
-    AI -- structured requests --> OPENAI
+    AISVC -- structured requests --> OPENAI
 ```
 
 Original evidence is never modified or compressed. Derived artifacts (OCR
@@ -85,7 +85,11 @@ environment-based configuration. Deployable to Railway.
 classifies uploaded images for sensitive content; the Go backend owns the
 policy decision, the Python side only reports labels and scores.
 
-**Planned (later phases):** OpenAI Responses API for evidence analysis.
+**OCR & AI:** Tesseract (via cgo) for images and native PDF text extraction
+for documents, both behind a common `internal/ocr` interface; the OpenAI
+Responses API with Structured Outputs for summaries, timelines, and gap
+analysis; deterministic regex PII detection as a backstop the AI can't
+silently override.
 
 ## Security architecture
 
@@ -146,12 +150,36 @@ policy decision, the Python side only reports labels and scores.
 
 ## AI architecture
 
-AI (OpenAI Responses API, Phase 5) is used only for organization, extraction,
-summarization, and privacy protection — never to make investigative or legal
-determinations. All AI output uses explicit JSON-schema structured outputs,
-is validated server-side before it is persisted or acted on, and explicitly
-represents unknown information as unknown rather than inventing it. The
-OpenAI API key is a backend-only secret and is never exposed to the frontend.
+`POST /api/v1/evidence/:id/analyze` runs the pipeline: OCR text extraction
+(`internal/ocr`) → deterministic PII detection (`internal/pii`) → an OpenAI
+Responses API call (`internal/ai`) for a plain-language summary, a
+chronological timeline, contextual PII, and information gaps. AI is used
+only for organization, extraction, summarization, and privacy protection —
+never to make investigative or legal determinations. The system prompt
+(`internal/ai/openai.go`) explicitly forbids asserting guilt or that
+something "definitely happened," and requires hedged language ("the
+document appears to state") and an explicit "unknown" for anything that
+can't be determined from the text.
+
+The model is called with a **strict JSON Schema** (`internal/ai/schema.go`)
+via Structured Outputs, and — because a schema constrains shape, not
+truthfulness — the response is re-validated server-side (`internal/ai/
+openai.go:validate`) before it's ever persisted: every timeline entry needs
+a date and description, every gap needs a valid confidence level, nothing
+with an empty required field survives. Calls retry up to 3 times with
+backoff; if every attempt fails, evidence analysis degrades to OCR + regex
+PII with an honest "AI analysis could not be completed" summary rather than
+failing the whole request — the evidence and its extracted text are never
+lost because the AI step had a bad day.
+
+PII detection deliberately isn't AI-only: `internal/pii` runs deterministic
+regexes (email, phone, long-digit-run "possible ID") independently of the
+model, and the two result sets are merged (`internal/analysis/service.go:
+mergeDetections`), with the regex hit winning on an exact value match since
+it's a precise pattern match rather than a paraphrase.
+
+The OpenAI API key is a backend-only secret and is never exposed to the
+frontend.
 
 ## Local development
 
@@ -162,6 +190,8 @@ OpenAI API key is a backend-only secret and is never exposed to the frontend.
   fetch that toolchain automatically on first use via `GOTOOLCHAIN=auto`)
 - Python 3.12+ (only if running the content-safety service outside Docker)
 - Docker (for PostgreSQL and NudeNet, and optionally the full stack)
+- An OpenAI API key (optional — evidence analysis falls back to OCR + regex
+  PII detection without one; see [OpenAI setup](#openai-setup))
 
 ### Quick start with Docker Compose
 
@@ -199,6 +229,17 @@ go run ./cmd/api
 
 The server applies pending SQL migrations automatically on startup.
 
+Image OCR (`internal/ocr/tesseract_cgo.go`) uses cgo and needs the Tesseract
+development libraries (`libtesseract-dev` + `libleptonica-dev` on Debian/
+Ubuntu, or the Tesseract-OCR distribution plus a matching 64-bit toolchain
+on Windows) to build and run. Without a working cgo toolchain, the build
+automatically falls back to a stub (`tesseract_nocgo.go`, selected via Go's
+built-in `cgo` build tag) that keeps everything else building and testing
+locally, but returns an error if you actually try to OCR an image outside
+Docker — PDF text extraction is pure Go and unaffected. The Docker image
+always uses the real Tesseract backend; this fallback exists purely for
+local iteration on machines without a working cgo setup.
+
 ### Running the frontend
 
 ```bash
@@ -231,7 +272,8 @@ the default in `backend/.env.example`).
 | `DATABASE_URL` | PostgreSQL connection string (required) |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed origins |
 | `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3-compatible object storage credentials (used from Phase 3) |
-| `OPENAI_API_KEY` | OpenAI API key, backend-only (used from Phase 5) |
+| `OPENAI_API_KEY` | OpenAI API key, backend-only. Empty disables AI analysis (evidence analysis still runs OCR + regex PII detection) |
+| `OPENAI_MODEL` | Overrides the model used for analysis. Defaults to `gpt-4o-mini` |
 | `NUDENET_SERVICE_URL` | Base URL of the content-safety service. Empty disables classification (uploads stay `quarantined`) |
 | `SESSION_SECRET` | Secret used to sign session cookies (used from Phase 2) |
 
@@ -251,7 +293,8 @@ applied automatically, in order, on every server startup, and recorded in a
 To add a migration, create a new numbered `.sql` file in that directory and
 restart the server (or redeploy). So far: `0001_init.sql` (extensions,
 `users`), `0002_sessions.sql` (server-side session store), `0003_evidence.sql`
-(`evidence`, `evidence_files`, append-only `audit_events`).
+(`evidence`, `evidence_files`, append-only `audit_events`), `0004_analysis.sql`
+(`evidence_analysis`, `timeline_events`, `pii_detections`).
 
 ## Running tests
 
@@ -265,14 +308,22 @@ CSRF/rate-limit integration tests run against a real Postgres when
 `TEST_DATABASE_URL` is set; the evidence upload integration test additionally
 needs real S3 credentials (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`,
 `S3_SECRET_ACCESS_KEY`) and writes/reads/deletes under a throwaway key in
-your actual bucket. All of these `t.Skip` when their prerequisite isn't set:
+your actual bucket; the analysis integration test additionally needs
+`OPENAI_API_KEY` and makes a real OpenAI call (it skips model-output
+assertions, rather than failing outright, if that call errors — e.g. an
+invalid key — since OCR and PII detection are still worth verifying on
+their own). All of these `t.Skip` when their prerequisite isn't set:
 
 ```bash
 docker compose up -d postgres
 cd backend
-set -a && source .env && set +a   # loads S3_* and friends
-TEST_DATABASE_URL="postgres://shield:shield@localhost:5433/shield?sslmode=disable" go test ./...
+set -a && source .env && set +a   # loads S3_*, OPENAI_API_KEY, and friends
+CGO_ENABLED=0 TEST_DATABASE_URL="postgres://shield:shield@localhost:5433/shield?sslmode=disable" go test ./...
 ```
+
+(`CGO_ENABLED=0` only matters if your machine lacks a working cgo/Tesseract
+toolchain — see [Running the backend without Docker](#running-the-backend-without-docker).
+Everything except image OCR itself is still fully exercised.)
 
 The content-safety service has its own Python test suite (real model, no
 mocking):
@@ -330,9 +381,13 @@ falls back to `review` instead of `safe`.
 
 ## OpenAI setup
 
-Set `OPENAI_API_KEY` as a backend-only environment variable. The key is read
-server-side only and is never sent to or exposed in the frontend bundle.
-Integration lands in Phase 5.
+Set `OPENAI_API_KEY` as a backend-only environment variable (get one at
+https://platform.openai.com/account/api-keys — it should start with `sk-`).
+The key is read server-side only and is never sent to or exposed in the
+frontend bundle. Optionally set `OPENAI_MODEL` to override the default
+(`gpt-4o-mini`). Without a key, `/evidence/:id/analyze` still runs OCR and
+regex-based PII detection; the summary explicitly says AI analysis isn't
+configured rather than silently producing nothing.
 
 ## API documentation
 
@@ -349,11 +404,14 @@ Implemented so far:
 | `GET` | `/api/v1/evidence/` | session | List your evidence |
 | `GET` | `/api/v1/evidence/:id` | session | Evidence detail, including a signed URL for the original |
 | `DELETE` | `/api/v1/evidence/:id` | session + CSRF | Soft-delete evidence |
+| `POST` | `/api/v1/evidence/:id/analyze` | session + CSRF, rate-limited | Run OCR → PII detection → AI analysis and persist the result |
+| `GET` | `/api/v1/evidence/:id/analysis` | session | Most recent summary, gaps, timeline, and PII (`404` if not yet analyzed) |
+| `GET` | `/api/v1/evidence/:id/timeline` | session | Just the timeline |
+| `GET` | `/api/v1/evidence/:id/pii` | session | Just the detected PII |
 | `GET` | `/api/v1/audit/:evidenceID` | session | Append-only audit trail for one piece of evidence |
 
-The full planned surface (timeline, PII, redaction, disclosures) is
-documented as it's implemented in later phases; see the phase plan below for
-the target shape.
+The full planned surface (redaction, disclosures) is documented as it's
+implemented in later phases; see the phase plan below for the target shape.
 
 Errors use a consistent envelope and never leak internal details:
 
@@ -413,7 +471,24 @@ check, doc updates, and a commit before moving on.
       failing the upload, and a PDF is marked `safe` with an audit note that
       content-safety scanning doesn't apply to it. The sensitive-content
       reveal gate was also driven through the actual browser UI.
-- [ ] Phase 5 — OCR & AI
+- [x] **Phase 5 — OCR & AI:** text extraction behind a common interface
+      (`internal/ocr`) — real Tesseract via cgo for images, native Go PDF
+      text extraction for documents — feeding an OpenAI Responses API call
+      (`internal/ai`) with a strict JSON Schema for summary/timeline/PII/
+      gaps, re-validated server-side rather than trusted on schema alone.
+      Deterministic regex PII detection (`internal/pii`) runs independently
+      of the model and is merged with its contextual findings. A failed or
+      unconfigured AI call degrades gracefully to OCR + regex results with
+      an honest status message, never a fabricated summary. Verified against
+      the real Tesseract binary through the actual Docker image (confirmed
+      an authentic OCR misread on a garbled email, then a clean extraction
+      of a real email and phone number, both correctly picked up by the
+      regex detector and rendered in the browser UI) and against real
+      Postgres/S3 in an automated integration test. **Note:** the OpenAI key
+      currently in `backend/.env` returns `401 Unauthorized` from the real
+      API — the AI step visibly and correctly degrades rather than failing,
+      but a valid key is needed to see actual model output; see
+      [OpenAI setup](#openai-setup).
 - [ ] Phase 6 — Redaction
 - [ ] Phase 7 — Controlled disclosure
 - [ ] Phase 8 — Polish

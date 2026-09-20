@@ -1,8 +1,25 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ShieldCheck, ShieldAlert, Trash2, ExternalLink, Eye } from 'lucide-react'
-import { deleteEvidence, getEvidence, getEvidenceAudit } from '@/lib/evidence-api'
+import {
+  ArrowLeft,
+  ShieldCheck,
+  ShieldAlert,
+  Trash2,
+  ExternalLink,
+  Eye,
+  Sparkles,
+  History,
+  UserRound,
+} from 'lucide-react'
+import {
+  analyzeEvidence,
+  deleteEvidence,
+  getEvidence,
+  getEvidenceAnalysis,
+  getEvidenceAudit,
+} from '@/lib/evidence-api'
+import { ApiError } from '@/lib/api'
 import { StatusBadge } from '@/components/StatusBadge'
 
 function formatBytes(bytes: number): string {
@@ -35,6 +52,25 @@ export function EvidenceDetail() {
     enabled: !!id,
   })
 
+  const {
+    data: analysis,
+    isLoading: analysisLoading,
+    error: analysisError,
+  } = useQuery({
+    queryKey: ['evidence', id, 'analysis'],
+    queryFn: () => getEvidenceAnalysis(id!),
+    enabled: !!id,
+    retry: false,
+  })
+
+  const analyzeMutation = useMutation({
+    mutationFn: () => analyzeEvidence(id!),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['evidence', id, 'analysis'], result)
+      queryClient.invalidateQueries({ queryKey: ['evidence', id, 'audit'] })
+    },
+  })
+
   const deleteMutation = useMutation({
     mutationFn: () => deleteEvidence(id!),
     onSuccess: () => {
@@ -42,6 +78,8 @@ export function EvidenceDetail() {
       navigate('/evidence', { replace: true })
     },
   })
+
+  const notAnalyzedYet = analysisError instanceof ApiError && analysisError.code === 'ANALYSIS_NOT_FOUND'
 
   if (isLoading || !evidence) {
     return (
@@ -138,6 +176,108 @@ export function EvidenceDetail() {
           </a>
         )}
       </div>
+
+      <div className="mb-6 rounded-lg border border-shield-200 bg-white p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-shield-900">
+            <Sparkles className="h-4 w-4 text-shield-500" strokeWidth={1.75} />
+            AI Summary
+          </h2>
+          {!analysisLoading && (
+            <button
+              type="button"
+              onClick={() => analyzeMutation.mutate()}
+              disabled={analyzeMutation.isPending}
+              className="rounded-md border border-shield-300 px-3 py-1.5 text-xs font-medium text-shield-800 hover:bg-shield-50 disabled:opacity-60"
+            >
+              {analyzeMutation.isPending
+                ? 'Analyzing…'
+                : analysis
+                  ? 'Re-analyze'
+                  : 'Analyze evidence'}
+            </button>
+          )}
+        </div>
+
+        {analyzeMutation.isError && (
+          <p className="mb-3 text-sm text-status-rejected">
+            {analyzeMutation.error instanceof ApiError
+              ? analyzeMutation.error.message
+              : 'Analysis failed. Please try again.'}
+          </p>
+        )}
+
+        {analysisLoading && <p className="text-sm text-shield-400">Loading…</p>}
+
+        {!analysisLoading && notAnalyzedYet && !analysis && (
+          <p className="text-sm text-shield-400">
+            Not analyzed yet. Shield can extract text, generate a plain-language summary and
+            timeline, and flag possible personal information — nothing here determines whether an
+            incident occurred.
+          </p>
+        )}
+
+        {analysis && (
+          <>
+            <p className="text-sm text-shield-800">{analysis.analysis.summary}</p>
+
+            {analysis.analysis.gaps.length > 0 && (
+              <div className="mt-4">
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-shield-500">
+                  Information gaps
+                </h3>
+                <ul className="space-y-1">
+                  {analysis.analysis.gaps.map((g, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-shield-700">
+                      <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-shield-400" />
+                      {g.description}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {analysis && analysis.timeline.length > 0 && (
+        <div className="mb-6 rounded-lg border border-shield-200 bg-white p-5">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-shield-900">
+            <History className="h-4 w-4 text-shield-500" strokeWidth={1.75} />
+            Timeline
+          </h2>
+          <ul className="space-y-3">
+            {analysis.timeline.map((t) => (
+              <li key={t.id} className="flex gap-3 text-sm">
+                <span className="w-24 shrink-0 font-mono text-xs text-shield-500">{t.date}</span>
+                <span className="text-shield-800">{t.description}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {analysis && analysis.pii.length > 0 && (
+        <div className="mb-6 rounded-lg border border-shield-200 bg-white p-5">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-shield-900">
+            <UserRound className="h-4 w-4 text-shield-500" strokeWidth={1.75} />
+            Privacy — {analysis.pii.length} item{analysis.pii.length === 1 ? '' : 's'} detected
+          </h2>
+          <ul className="space-y-2">
+            {analysis.pii.map((p) => (
+              <li key={p.id} className="flex items-center justify-between gap-3 text-sm">
+                <div className="min-w-0">
+                  <span className="font-medium text-shield-900">{p.type}</span>{' '}
+                  <span className="text-shield-600">{p.value}</span>
+                </div>
+                <span className="shrink-0 rounded-full bg-shield-100 px-2 py-0.5 text-xs text-shield-500">
+                  {p.detection_method}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="mb-6 rounded-lg border border-shield-200 bg-white p-5">
         <h2 className="mb-3 text-sm font-semibold text-shield-900">Activity</h2>
