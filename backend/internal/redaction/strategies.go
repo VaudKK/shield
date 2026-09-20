@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"image"
 	"strings"
 
 	"github.com/VaudKK/shield/backend/internal/domain"
@@ -26,17 +25,19 @@ func (s *Service) redactImageFile(
 		return nil, "", "", fmt.Errorf("locate text for redaction: %w", err)
 	}
 
-	var regions []image.Rectangle
-	for _, item := range accepted {
-		found := findRegions(words, item.Value)
-		applied[item.ID] = len(found) > 0
-		regions = append(regions, found...)
+	values := make([]string, len(accepted))
+	for i, item := range accepted {
+		values[i] = item.Value
 	}
 
-	redacted, err = redactImage(data, regions)
+	redacted, appliedByValue, err := RedactImageForValues(data, words, values)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("draw redactions: %w", err)
 	}
+	for _, item := range accepted {
+		applied[item.ID] = appliedByValue[item.Value]
+	}
+
 	return redacted, "image/png", ".png", nil
 }
 
@@ -57,20 +58,17 @@ func (s *Service) redactTextTranscript(
 		text = analysis.OCRText
 	}
 
-	for _, item := range accepted {
-		if item.Value == "" {
-			applied[item.ID] = false
-			continue
-		}
-		if strings.Contains(text, item.Value) {
-			text = strings.ReplaceAll(text, item.Value, "[REDACTED]")
-			applied[item.ID] = true
-		} else {
-			applied[item.ID] = false
-		}
+	values := make([]string, len(accepted))
+	for i, item := range accepted {
+		values[i] = item.Value
 	}
 
-	return []byte(text), "text/plain; charset=utf-8", ".txt", nil
+	redactedText, appliedByValue := RedactTextForValues(text, values)
+	for _, item := range accepted {
+		applied[item.ID] = appliedByValue[item.Value]
+	}
+
+	return []byte(redactedText), "text/plain; charset=utf-8", ".txt", nil
 }
 
 func bytesReader(b []byte) *bytes.Reader {

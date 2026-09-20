@@ -4,6 +4,8 @@ import { RequireAuth } from '@/components/RequireAuth'
 import { Dashboard } from '@/pages/Dashboard'
 import { Evidence } from '@/pages/Evidence'
 import { EvidenceDetail } from '@/pages/EvidenceDetail'
+import { Disclosures } from '@/pages/Disclosures'
+import { CreateDisclosure } from '@/pages/CreateDisclosure'
 import { Login } from '@/pages/Login'
 import { Register } from '@/pages/Register'
 import { Placeholder } from '@/pages/Placeholder'
@@ -28,15 +30,8 @@ function App() {
               />
             }
           />
-          <Route
-            path="/disclosures"
-            element={
-              <Placeholder
-                title="Disclosures"
-                description="Build and manage controlled disclosure packages."
-              />
-            }
-          />
+          <Route path="/disclosures" element={<Disclosures />} />
+          <Route path="/disclosures/new" element={<CreateDisclosure />} />
           <Route
             path="/activity"
             element={

@@ -11,9 +11,9 @@ violence, harassment, corruption, or other incidents.
 
 ## Status
 
-This repository is being built in phases. **Phases 1–6 (Foundation,
+This repository is being built in phases. **Phases 1–7 (Foundation,
 Authentication & Security, Evidence Upload, Content Safety, OCR & AI,
-Redaction) are complete.** See
+Redaction, Controlled Disclosure) are complete.** See
 [Development approach](#development-approach) below for what's implemented
 and what's next.
 
@@ -98,6 +98,12 @@ transcript for PDFs (see [Redaction](#redaction) for why those aren't the
 same guarantee). The original file is never touched; a redaction always
 creates a new derived file.
 
+**Controlled disclosure:** a Safe Disclosure Package is a ZIP built with the
+Go standard library (`archive/zip`, `html/template` — no new dependency) —
+a generated HTML report plus the selected evidence files, privacy-protected
+per the user's toggles. The original evidence is never included unmodified
+if a protection applies to it; the package is always a separate export.
+
 ## Security architecture
 
 - **Authentication:** email/password with bcrypt (cost 12). Sessions are
@@ -151,6 +157,13 @@ creates a new derived file.
   `redacted/`, linked back to the same evidence. Only PII the user has
   explicitly accepted is ever covered; rejecting an item guarantees it's
   left alone on the next redaction run.
+- **Disclosure packages:** scoped strictly per-owner (a disclosure for
+  evidence you don't own 404s the same way evidence itself does), stored
+  under `exports/` as their own standalone ZIP, and only ever served through
+  a fresh 5-minute signed URL minted on request — never a permanent link,
+  and never regenerated in place (a re-download re-signs the same stored
+  file rather than rebuilding it, so what you download always matches what
+  was reviewed at creation time).
 - Structured logging never includes raw evidence content, passwords, session
   tokens, API keys, or sensitive PII.
 - Secrets are only ever read from environment variables and are never
@@ -224,6 +237,38 @@ values are replaced with `[REDACTED]` in the extracted OCR text
 (`evidence_analysis.ocr_text`) and that transcript is stored as the derived
 file. This is a real, useful redaction of the *text*, but it is explicitly
 not the same guarantee as the image path, and the UI doesn't imply otherwise.
+
+## Controlled disclosure
+
+`POST /api/v1/disclosures` builds a **Safe Disclosure Package**: a ZIP
+containing a generated `report.html` (incident summary, evidence timeline,
+evidence index with SHA-256 hashes and the standard "not proof of
+authenticity" disclaimer, a per-item redaction report, generation
+timestamp) plus an `evidence/` folder with the selected files themselves,
+protected per the request's toggles (`internal/disclosure/service.go`).
+
+**How disclosure-time redaction relates to per-evidence review (Phase 6):**
+an item you've explicitly **rejected** during per-evidence PII review is
+never bulk-redacted into a disclosure package, even with the matching
+toggle on — a reject is treated as a deliberate choice to keep that item
+visible, and a package-level toggle doesn't override it. Everything else
+matching an enabled toggle (`remove_phone_numbers`, `remove_emails`,
+`remove_id_numbers`) is redacted using the exact same real pixel-redaction
+(images) or text-transcript (PDFs) primitives as Phase 6 — the logic is
+shared via `redaction.RedactImageForValues` / `RedactTextForValues`
+(`internal/redaction/export.go`), not duplicated.
+
+`remove_metadata` forces every included image through the same re-encode
+pipeline (stripping EXIF/metadata as a side effect of always re-encoding to
+PNG) even when no PII redaction is otherwise needed for that image.
+`blur_faces` is accepted as an option but **not implemented** in this
+version — no face-detection component exists yet — and the generated
+report says so explicitly rather than silently doing nothing.
+
+A package is immutable once created: there's no edit or re-generate
+endpoint, matching "what you reviewed is what gets shared." `GET
+/disclosures/:id/download` always re-signs the *same* stored ZIP rather
+than rebuilding it.
 
 ## Local development
 
@@ -339,7 +384,8 @@ restart the server (or redeploy). So far: `0001_init.sql` (extensions,
 `users`), `0002_sessions.sql` (server-side session store), `0003_evidence.sql`
 (`evidence`, `evidence_files`, append-only `audit_events`), `0004_analysis.sql`
 (`evidence_analysis`, `timeline_events`, `pii_detections`), `0005_redactions.sql`
-(`redactions`, and widens `pii_detections.detection_method` to allow `manual`).
+(`redactions`, and widens `pii_detections.detection_method` to allow `manual`),
+`0006_disclosures.sql` (`disclosures`, `disclosure_evidence`).
 
 ## Running tests
 
@@ -457,9 +503,10 @@ Implemented so far:
 | `PATCH` | `/api/v1/evidence/:id/pii/:piiID` | session + CSRF | Accept or reject a detected/manual PII item |
 | `POST` | `/api/v1/evidence/:id/redact` | session + CSRF | Create a new redacted copy covering every currently-accepted item |
 | `GET` | `/api/v1/audit/:evidenceID` | session | Append-only audit trail for one piece of evidence |
-
-The full planned surface (disclosures) is documented as it's implemented in
-later phases; see the phase plan below for the target shape.
+| `POST` | `/api/v1/disclosures/` | session + CSRF, rate-limited | Build a Safe Disclosure Package from selected evidence |
+| `GET` | `/api/v1/disclosures/` | session | List your disclosure packages |
+| `GET` | `/api/v1/disclosures/:id` | session | Package metadata (title, toggles, included evidence IDs) |
+| `GET` | `/api/v1/disclosures/:id/download` | session | A fresh short-lived signed URL for the package ZIP |
 
 Errors use a consistent envelope and never leak internal details:
 
@@ -553,8 +600,25 @@ check, doc updates, and a commit before moving on.
       response check. The PDF transcript path and the full accept/reject/
       manual-add/redact flow are additionally covered by an automated
       integration test against real Postgres and S3.
-- [ ] Phase 7 — Controlled disclosure
-- [ ] Phase 7 — Controlled disclosure
+- [x] **Phase 7 — Controlled disclosure:** Safe Disclosure Packages
+      (`internal/disclosure`) — a ZIP built with the Go standard library
+      (`archive/zip`, `html/template`, no new dependency) containing a
+      generated report (summary, timeline, evidence index with integrity
+      hashes, a per-item redaction report, generation timestamp) plus the
+      selected evidence files, privacy-protected per the toggles. Reuses
+      Phase 6's real pixel-redaction and text-transcript primitives rather
+      than duplicating them, and respects an explicit per-evidence PII
+      *rejection* as an override to a package-level removal toggle. Packages
+      are immutable and scoped strictly per-owner. Verified live through the
+      real Docker image: created a package that removed emails but kept
+      phone numbers, downloaded the actual ZIP, and visually confirmed the
+      extracted image had the email precisely blacked out with the phone
+      number untouched, plus checked the generated report's protections
+      list, redaction notes, and honest "face blurring not available" note
+      all matched. Also driven through the real browser UI end to end
+      (evidence selection, toggles, package creation, download, list view),
+      and covered by an automated integration test against real Postgres
+      and S3 that inspects the actual ZIP contents.
 - [ ] Phase 8 — Polish
 - [ ] Phase 9 — Testing & hardening
 - [ ] Phase 10 — Hackathon demo

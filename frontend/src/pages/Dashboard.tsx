@@ -3,6 +3,7 @@ import { FileStack, ShieldAlert, ShieldCheck, Send, Lock } from 'lucide-react'
 import { StatCard } from '@/components/StatCard'
 import { getHealth } from '@/lib/api'
 import { listEvidence } from '@/lib/evidence-api'
+import { listDisclosures } from '@/lib/disclosure-api'
 
 export function Dashboard() {
   const { data: health } = useQuery({
@@ -13,6 +14,11 @@ export function Dashboard() {
   const { data: evidenceList } = useQuery({
     queryKey: ['evidence'],
     queryFn: listEvidence,
+  })
+
+  const { data: disclosures } = useQuery({
+    queryKey: ['disclosures'],
+    queryFn: listDisclosures,
   })
 
   const reviewCount = evidenceList?.filter((e) => e.status === 'review').length ?? 0
@@ -38,7 +44,7 @@ export function Dashboard() {
         <StatCard label="Evidence" value={evidenceList?.length ?? 0} icon={FileStack} />
         <StatCard label="Needs Review" value={reviewCount} icon={ShieldAlert} tone="warning" />
         <StatCard label="Protected" value={safeCount} icon={ShieldCheck} tone="success" />
-        <StatCard label="Disclosure Packages" value={0} icon={Send} />
+        <StatCard label="Disclosure Packages" value={disclosures?.length ?? 0} icon={Send} />
       </div>
 
       <div className="mt-8 rounded-lg border border-shield-200 bg-white p-6">

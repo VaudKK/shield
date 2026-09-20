@@ -17,6 +17,7 @@ import (
 	"github.com/VaudKK/shield/backend/internal/config"
 	"github.com/VaudKK/shield/backend/internal/contentsafety"
 	"github.com/VaudKK/shield/backend/internal/db"
+	"github.com/VaudKK/shield/backend/internal/disclosure"
 	"github.com/VaudKK/shield/backend/internal/evidence"
 	"github.com/VaudKK/shield/backend/internal/httpapi"
 	"github.com/VaudKK/shield/backend/internal/ocr"
@@ -73,6 +74,9 @@ func run(logger *slog.Logger) error {
 
 	// 10 analysis runs per minute per IP — each one is a real OpenAI call.
 	analysisLimiter := ratelimit.NewInMemoryLimiter(10, time.Minute, 5)
+
+	// 10 disclosure packages per minute per IP.
+	disclosureLimiter := ratelimit.NewInMemoryLimiter(10, time.Minute, 5)
 
 	objectStorage, err := storage.NewS3Storage(ctx, storage.S3Config{
 		Endpoint:  cfg.S3Endpoint,
@@ -135,19 +139,33 @@ func run(logger *slog.Logger) error {
 		ocrService,
 	)
 
+	disclosureService := disclosure.NewService(
+		repository.NewEvidenceRepository(pool),
+		repository.NewEvidenceFileRepository(pool),
+		repository.NewAnalysisRepository(pool),
+		repository.NewTimelineRepository(pool),
+		repository.NewPIIRepository(pool),
+		repository.NewAuditRepository(pool),
+		repository.NewDisclosureRepository(pool),
+		objectStorage,
+		ocrService,
+	)
+
 	server := &httpapi.Server{
-		Pool:                pool,
-		Logger:              logger,
-		Env:                 cfg.Env,
-		Auth:                authService,
-		Evidence:            evidenceService,
-		Analysis:            analysisService,
-		Redaction:           redactionService,
-		AuthRateLimiter:     authLimiter,
-		UploadRateLimiter:   uploadLimiter,
-		AnalysisRateLimiter: analysisLimiter,
-		AllowedOrigins:      cfg.CORSAllowedOrigins,
-		Version:             version,
+		Pool:                  pool,
+		Logger:                logger,
+		Env:                   cfg.Env,
+		Auth:                  authService,
+		Evidence:              evidenceService,
+		Analysis:              analysisService,
+		Redaction:             redactionService,
+		Disclosure:            disclosureService,
+		AuthRateLimiter:       authLimiter,
+		UploadRateLimiter:     uploadLimiter,
+		AnalysisRateLimiter:   analysisLimiter,
+		DisclosureRateLimiter: disclosureLimiter,
+		AllowedOrigins:        cfg.CORSAllowedOrigins,
+		Version:               version,
 	}
 
 	httpServer := &http.Server{

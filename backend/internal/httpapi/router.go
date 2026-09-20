@@ -8,6 +8,7 @@ import (
 
 	"github.com/VaudKK/shield/backend/internal/analysis"
 	"github.com/VaudKK/shield/backend/internal/auth"
+	"github.com/VaudKK/shield/backend/internal/disclosure"
 	"github.com/VaudKK/shield/backend/internal/evidence"
 	"github.com/VaudKK/shield/backend/internal/ratelimit"
 	"github.com/VaudKK/shield/backend/internal/redaction"
@@ -22,10 +23,11 @@ type Server struct {
 	Logger *slog.Logger
 	Env    string
 
-	Auth      *auth.Service
-	Evidence  *evidence.Service
-	Analysis  *analysis.Service
-	Redaction *redaction.Service
+	Auth       *auth.Service
+	Evidence   *evidence.Service
+	Analysis   *analysis.Service
+	Redaction  *redaction.Service
+	Disclosure *disclosure.Service
 
 	// AuthRateLimiter throttles the unauthenticated auth endpoints
 	// (register/login), which are the most attractive brute-force targets.
@@ -38,6 +40,10 @@ type Server struct {
 	// AnalysisRateLimiter throttles evidence analysis requests per IP —
 	// each one is an OpenAI API call and worth rate limiting independently.
 	AnalysisRateLimiter ratelimit.Limiter
+
+	// DisclosureRateLimiter throttles package generation per IP — each one
+	// does real work (image processing, zipping) and hits object storage.
+	DisclosureRateLimiter ratelimit.Limiter
 
 	AllowedOrigins []string
 	Version        string
@@ -92,7 +98,14 @@ func (s *Server) Router() http.Handler {
 
 		r.With(s.requireAuth).Get("/audit/{evidenceID}", s.handleEvidenceAudit)
 
-		// Disclosure routes are added in a later phase.
+		r.Route("/disclosures", func(r chi.Router) {
+			r.Use(s.requireAuth)
+
+			r.Get("/", s.handleListDisclosures)
+			r.With(rateLimit(s.DisclosureRateLimiter, "DISCLOSURE_RATE_LIMITED"), requireCSRF).Post("/", s.handleCreateDisclosure)
+			r.Get("/{id}", s.handleGetDisclosure)
+			r.Get("/{id}/download", s.handleDownloadDisclosure)
+		})
 	})
 
 	return r
