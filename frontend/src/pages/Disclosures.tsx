@@ -21,7 +21,7 @@ export function Disclosures() {
           </p>
         </div>
         <Link
-          to="/disclosures/new"
+          to="/dashboard/disclosures/new"
           className="flex shrink-0 items-center gap-2 rounded-md bg-shield-800 px-3 py-2 text-sm font-medium text-white hover:bg-shield-900"
         >
           <Plus className="h-4 w-4" strokeWidth={1.75} />

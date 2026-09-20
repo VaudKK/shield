@@ -75,7 +75,7 @@ export function CreateDisclosure() {
             </a>
           )}
           <div className="mt-6">
-            <Link to="/disclosures" className="text-sm font-medium text-shield-700 hover:underline">
+            <Link to="/dashboard/disclosures" className="text-sm font-medium text-shield-700 hover:underline">
               Back to disclosures
             </Link>
           </div>
@@ -88,7 +88,7 @@ export function CreateDisclosure() {
     <div className="mx-auto max-w-2xl px-8 py-10">
       <button
         type="button"
-        onClick={() => navigate('/disclosures')}
+        onClick={() => navigate('/dashboard/disclosures')}
         className="mb-6 flex items-center gap-1 text-sm text-shield-500 hover:text-shield-800"
       >
         <ArrowLeft className="h-4 w-4" strokeWidth={1.75} />

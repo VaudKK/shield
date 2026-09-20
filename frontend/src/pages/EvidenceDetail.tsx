@@ -117,7 +117,7 @@ export function EvidenceDetail() {
     mutationFn: () => deleteEvidence(id!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['evidence'] })
-      navigate('/evidence', { replace: true })
+      navigate('/dashboard/evidence', { replace: true })
     },
   })
 
@@ -141,7 +141,7 @@ export function EvidenceDetail() {
     <div className="mx-auto max-w-3xl px-8 py-10">
       <button
         type="button"
-        onClick={() => navigate('/evidence')}
+        onClick={() => navigate('/dashboard/evidence')}
         className="mb-6 flex items-center gap-1 text-sm text-shield-500 hover:text-shield-800"
       >
         <ArrowLeft className="h-4 w-4" strokeWidth={1.75} />

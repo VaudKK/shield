@@ -17,6 +17,13 @@ Redaction, Controlled Disclosure) are complete.** See
 [Development approach](#development-approach) below for what's implemented
 and what's next.
 
+**Access model note:** the MVP journey does not require an account. Opening
+Shield takes you to a landing page with **Create Secure Vault** / **Recover
+Existing Vault** — no email, no password, no login screen in the default
+flow. See [Vault access](#vault-access) for how this works and why the
+underlying `users`/`sessions` tables (and the original email/password
+Login/Register pages) are still there, just not on the critical path.
+
 ## Problem
 
 People documenting abuse, harassment, corruption, or violence often have no
@@ -104,24 +111,82 @@ a generated HTML report plus the selected evidence files, privacy-protected
 per the user's toggles. The original evidence is never included unmodified
 if a protection applies to it; the package is always a separate export.
 
+## Vault access
+
+Shield's default journey needs no account:
+
+```
+Landing (/) → Create Secure Vault → Vault ID + recovery key (shown once) → Dashboard
+```
+
+or, to get back into an existing vault on any device:
+
+```
+Landing (/) → Recover Existing Vault → Vault ID + recovery key → Dashboard
+```
+
+**A "vault" is not a separate entity from a "user" under the hood — it's the
+same `users` row, created a different way.** `POST /api/v1/vaults` generates
+a public, non-secret `vault_id` (format `SH-XXXX-XXXX`) and a high-entropy
+recovery key (`XXXX-XXXX-XXXX-XXXX`, ~80 bits, from a Crockford-style
+alphabet that excludes ambiguous characters), hashes the recovery key with
+bcrypt into the same `password_hash` column a password would use, and
+inserts a `users` row with `email = NULL`. `POST /api/v1/vaults/recover`
+looks a vault up by `vault_id` and verifies the key the same way `/auth/
+login` verifies a password — including the same timing-safe "hash a dummy
+value on a miss" trick so a lookup for an unknown vault ID takes about as
+long as a wrong recovery key. Vault creation also immediately issues a
+session (the same session mechanism from Phase 2), so there's no separate
+login step after creation.
+
+**This is why the change to the rest of the app is close to zero.** Every
+Phase 3–7 service (evidence, analysis, redaction, disclosure) was already
+written to take an `ownerID uuid.UUID` — literally `user.ID` — and scope
+every query by it. A vault-created user's `ID` is exactly as valid an owner
+ID as an email-created one; `internal/evidence`, `internal/redaction`,
+`internal/disclosure`, `requireAuth`, CSRF, and rate limiting needed **no
+changes at all**. The entire pivot is: a new way to create/authenticate a
+`users` row, plus new frontend entry pages and a redirect target.
+
+**Nothing about this weakens access control.** `vault_id` is explicitly
+documented (and treated by the code) as non-secret — like a username, safe
+to write down or read aloud. The recovery key is the actual credential,
+never stored in plaintext, never logged, and never accepted via URL
+parameters (`POST` body only). Evidence is still scoped exactly as it was:
+knowing a `vault_id` alone grants nothing without the matching recovery key
+to start a session with it.
+
+**Email/password accounts (`/login`, `/register`, `POST /api/v1/auth/*`)
+are still there and still fully functional** — Phase 2's tests still pass
+unmodified — but the migration (`0007_vaults.sql`) adds a `CHECK
+(email IS NOT NULL) <> (vault_id IS NOT NULL)` constraint, so a `users` row
+is always exactly one or the other. The landing page just doesn't link to
+`/login` by default, per this being an anonymous-first MVP; the routes
+remain reachable directly and are a legitimate path for a later "optional
+account" feature.
+
 ## Security architecture
 
-- **Authentication:** email/password with bcrypt (cost 12). Sessions are
-  server-side records in PostgreSQL, referenced by an opaque random token
-  (never the DB primary key) stored in an `HttpOnly`, `SameSite=Lax` cookie
-  (`Secure` in production); only a SHA-256 hash of the token is persisted,
-  so a database leak alone doesn't yield usable sessions. Login failures for
-  unknown vs. known emails take the same code path and roughly the same time,
-  so responses don't reveal which emails are registered.
+- **Authentication:** email/password with bcrypt (cost 12), **or** an
+  anonymous vault ID + recovery key (see [Vault access](#vault-access)) —
+  either way, sessions are server-side records in PostgreSQL, referenced by
+  an opaque random token (never the DB primary key) stored in an
+  `HttpOnly`, `SameSite=Lax` cookie (`Secure` in production); only a
+  SHA-256 hash of the token is persisted, so a database leak alone doesn't
+  yield usable sessions. Login/recovery failures for unknown vs. known
+  emails or vault IDs take the same code path and roughly the same time, so
+  responses don't reveal which accounts exist.
 - **CSRF:** a double-submit token pattern — a second, non-`HttpOnly` cookie
   whose value must be echoed in an `X-CSRF-Token` header on state-changing
   authenticated requests — backs `SameSite=Lax` as defense in depth.
 - **Rate limiting:** a per-IP token-bucket limiter (`internal/ratelimit`,
   interface-based so a Redis-backed implementation can be swapped in for
-  multi-instance deployments) guards `/auth/register` and `/auth/login`.
-  This is a defense-in-depth layer, not a substitute for a DDoS/WAF layer
-  such as Cloudflare in front of production — see the note in
-  `internal/httpapi/middleware_ratelimit.go`.
+  multi-instance deployments) guards `/auth/register`, `/auth/login`,
+  `/vaults`, and `/vaults/recover` — brute-forcing a vault's recovery key is
+  exactly as attractive a target as brute-forcing a password, and is rate
+  limited the same way. This is a defense-in-depth layer, not a substitute
+  for a DDoS/WAF layer such as Cloudflare in front of production — see the
+  note in `internal/httpapi/middleware_ratelimit.go`.
 - **Request validation:** JSON bodies are size-limited (1 MiB), decoded with
   unknown fields rejected, and validated field-by-field before touching the
   database.
@@ -385,7 +450,10 @@ restart the server (or redeploy). So far: `0001_init.sql` (extensions,
 (`evidence`, `evidence_files`, append-only `audit_events`), `0004_analysis.sql`
 (`evidence_analysis`, `timeline_events`, `pii_detections`), `0005_redactions.sql`
 (`redactions`, and widens `pii_detections.detection_method` to allow `manual`),
-`0006_disclosures.sql` (`disclosures`, `disclosure_evidence`).
+`0006_disclosures.sql` (`disclosures`, `disclosure_evidence`), `0007_vaults.sql`
+(makes `users.email` nullable, adds `users.vault_id`, and adds a
+`CHECK (email IS NOT NULL) <> (vault_id IS NOT NULL)` constraint — see
+[Vault access](#vault-access)).
 
 ## Running tests
 
@@ -487,8 +555,10 @@ Implemented so far:
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
 | `GET` | `/health` | — | Liveness/readiness check, including database connectivity |
-| `POST` | `/api/v1/auth/register` | — (rate-limited) | Create an account, start a session |
-| `POST` | `/api/v1/auth/login` | — (rate-limited) | Authenticate, start a session |
+| `POST` | `/api/v1/vaults/` | — (rate-limited) | Create an anonymous vault; returns `{vault_id, recovery_key}` once and starts a session |
+| `POST` | `/api/v1/vaults/recover` | — (rate-limited) | Recover a vault by ID + recovery key, start a session |
+| `POST` | `/api/v1/auth/register` | — (rate-limited) | *(Optional path)* Create an email/password account, start a session |
+| `POST` | `/api/v1/auth/login` | — (rate-limited) | *(Optional path)* Authenticate with email/password, start a session |
 | `GET` | `/api/v1/auth/me` | session | Current user |
 | `POST` | `/api/v1/auth/logout` | session + CSRF | End the current session |
 | `POST` | `/api/v1/evidence/` | session + CSRF, rate-limited | Upload one file as new evidence (multipart: `file`, optional `title`) |

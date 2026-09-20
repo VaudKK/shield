@@ -121,7 +121,7 @@ function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
   return (
     <li>
       <Link
-        to={`/evidence/${evidence.id}`}
+        to={`/dashboard/evidence/${evidence.id}`}
         className="block rounded-lg border border-shield-200 bg-white p-4 transition-colors hover:border-shield-400"
       >
         <div className="mb-2 flex items-start justify-between gap-2">

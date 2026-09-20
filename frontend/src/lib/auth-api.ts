@@ -2,7 +2,8 @@ import { apiFetch } from '@/lib/api'
 
 export interface User {
   id: string
-  email: string
+  email?: string
+  vault_id?: string
   display_name: string
   created_at: string
 }

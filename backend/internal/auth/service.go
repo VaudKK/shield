@@ -7,6 +7,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -19,9 +20,10 @@ import (
 const SessionDuration = 7 * 24 * time.Hour
 
 var (
-	ErrEmailTaken         = errors.New("email already registered")
-	ErrInvalidCredentials = errors.New("invalid email or password")
-	ErrInvalidSession     = errors.New("invalid or expired session")
+	ErrEmailTaken           = errors.New("email already registered")
+	ErrInvalidCredentials   = errors.New("invalid email or password")
+	ErrInvalidSession       = errors.New("invalid or expired session")
+	ErrInvalidVaultRecovery = errors.New("invalid vault ID or recovery key")
 )
 
 type Service struct {
@@ -54,6 +56,67 @@ func (s *Service) Register(ctx context.Context, email, password, displayName str
 	}
 
 	return s.users.Create(ctx, email, hash, strings.TrimSpace(displayName))
+}
+
+const maxVaultIDAttempts = 5
+
+// CreateVault creates a new anonymous vault: a user row with no email,
+// identified by a freshly generated public vault ID and secured by a
+// freshly generated high-entropy recovery key. The raw recovery key is
+// returned exactly once — only its bcrypt hash is persisted, exactly like
+// a password. Callers must not log rawRecoveryKey.
+func (s *Service) CreateVault(ctx context.Context) (user *domain.User, rawRecoveryKey string, err error) {
+	rawRecoveryKey, err = security.GenerateRecoveryKey()
+	if err != nil {
+		return nil, "", err
+	}
+	hash, err := security.HashPassword(rawRecoveryKey)
+	if err != nil {
+		return nil, "", err
+	}
+
+	for range maxVaultIDAttempts {
+		vaultID, genErr := security.GenerateVaultID()
+		if genErr != nil {
+			return nil, "", genErr
+		}
+
+		taken, existsErr := s.users.VaultIDExists(ctx, vaultID)
+		if existsErr != nil {
+			return nil, "", existsErr
+		}
+		if taken {
+			continue
+		}
+
+		user, err = s.users.CreateVault(ctx, vaultID, hash)
+		if err != nil {
+			return nil, "", err
+		}
+		return user, rawRecoveryKey, nil
+	}
+
+	return nil, "", fmt.Errorf("could not generate a unique vault ID after %d attempts", maxVaultIDAttempts)
+}
+
+// RecoverVault authenticates a vault by its public ID and secret recovery
+// key. Failure modes (unknown vault ID vs. wrong key) are indistinguishable
+// to the caller, and take roughly the same time either way.
+func (s *Service) RecoverVault(ctx context.Context, vaultID, recoveryKey string) (*domain.User, error) {
+	user, err := s.users.GetByVaultID(ctx, strings.TrimSpace(vaultID))
+	if errors.Is(err, domain.ErrNotFound) {
+		security.VerifyPassword("$2a$12$00000000000000000000000000000000000000000000000000", recoveryKey)
+		return nil, ErrInvalidVaultRecovery
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if !security.VerifyPassword(user.PasswordHash, recoveryKey) {
+		return nil, ErrInvalidVaultRecovery
+	}
+
+	return user, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, email, password string) (*domain.User, error) {

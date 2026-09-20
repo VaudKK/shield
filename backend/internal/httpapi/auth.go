@@ -10,16 +10,18 @@ import (
 )
 
 type userResponse struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	CreatedAt   string `json:"created_at"`
+	ID          string  `json:"id"`
+	Email       *string `json:"email,omitempty"`
+	VaultID     *string `json:"vault_id,omitempty"`
+	DisplayName string  `json:"display_name"`
+	CreatedAt   string  `json:"created_at"`
 }
 
 func toUserResponse(u *domain.User) userResponse {
 	return userResponse{
 		ID:          u.ID.String(),
 		Email:       u.Email,
+		VaultID:     u.VaultID,
 		DisplayName: u.DisplayName,
 		CreatedAt:   u.CreatedAt.Format(timeFormat),
 	}
@@ -81,6 +83,61 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	case err != nil:
 		s.Logger.Error("login failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Something went wrong. Please try again.")
+		return
+	}
+
+	s.startSession(w, r, user)
+	writeJSON(w, http.StatusOK, toUserResponse(user))
+}
+
+type createVaultResponse struct {
+	VaultID     string `json:"vault_id"`
+	RecoveryKey string `json:"recovery_key"`
+}
+
+// handleCreateVault creates an anonymous vault and immediately starts a
+// session for it, so the client can go straight to the dashboard. The raw
+// recovery key is returned here exactly once and is never stored or logged
+// — only its bcrypt hash persists.
+func (s *Server) handleCreateVault(w http.ResponseWriter, r *http.Request) {
+	user, rawRecoveryKey, err := s.Auth.CreateVault(r.Context())
+	if err != nil {
+		s.Logger.Error("create vault failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Something went wrong. Please try again.")
+		return
+	}
+
+	s.startSession(w, r, user)
+	writeJSON(w, http.StatusCreated, createVaultResponse{
+		VaultID:     *user.VaultID,
+		RecoveryKey: rawRecoveryKey,
+	})
+}
+
+type recoverVaultRequest struct {
+	VaultID     string `json:"vault_id"`
+	RecoveryKey string `json:"recovery_key"`
+}
+
+func (s *Server) handleRecoverVault(w http.ResponseWriter, r *http.Request) {
+	var req recoverVaultRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	if req.VaultID == "" || req.RecoveryKey == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "Vault ID and recovery key are required.")
+		return
+	}
+
+	user, err := s.Auth.RecoverVault(r.Context(), req.VaultID, req.RecoveryKey)
+	switch {
+	case errors.Is(err, auth.ErrInvalidVaultRecovery):
+		writeError(w, http.StatusUnauthorized, "INVALID_VAULT_RECOVERY", "Incorrect vault ID or recovery key.")
+		return
+	case err != nil:
+		s.Logger.Error("recover vault failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Something went wrong. Please try again.")
 		return
 	}

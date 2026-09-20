@@ -25,7 +25,7 @@ export function Register() {
 
   const onSubmit = (values: FormValues) => {
     registerMutation.mutate(values, {
-      onSuccess: () => navigate('/', { replace: true }),
+      onSuccess: () => navigate('/dashboard', { replace: true }),
     })
   }
 

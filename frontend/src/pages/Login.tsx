@@ -24,7 +24,7 @@ export function Login() {
 
   const onSubmit = (values: FormValues) => {
     loginMutation.mutate(values, {
-      onSuccess: () => navigate('/', { replace: true }),
+      onSuccess: () => navigate('/dashboard', { replace: true }),
     })
   }
 

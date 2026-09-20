@@ -68,6 +68,14 @@ func (s *Server) Router() http.Handler {
 	r.Get("/health", s.handleHealth)
 
 	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/vaults", func(r chi.Router) {
+			r.With(rateLimit(s.AuthRateLimiter, "AUTH_RATE_LIMITED")).Post("/", s.handleCreateVault)
+			r.With(rateLimit(s.AuthRateLimiter, "AUTH_RATE_LIMITED")).Post("/recover", s.handleRecoverVault)
+		})
+
+		// Email/password accounts remain available as an optional,
+		// unlinked-from-the-default-UI path — see the frontend's landing
+		// page, which offers only vault creation/recovery by default.
 		r.Route("/auth", func(r chi.Router) {
 			r.With(rateLimit(s.AuthRateLimiter, "AUTH_RATE_LIMITED")).Post("/register", s.handleRegister)
 			r.With(rateLimit(s.AuthRateLimiter, "AUTH_RATE_LIMITED")).Post("/login", s.handleLogin)

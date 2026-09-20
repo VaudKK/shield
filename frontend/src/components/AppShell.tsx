@@ -13,12 +13,12 @@ import { cn } from '@/lib/utils'
 import { useCurrentUser, useLogout } from '@/hooks/useAuth'
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/evidence', label: 'Evidence', icon: FileStack },
-  { to: '/timeline', label: 'Timeline', icon: History },
-  { to: '/disclosures', label: 'Disclosures', icon: Send },
-  { to: '/activity', label: 'Activity', icon: Activity },
-  { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/dashboard/evidence', label: 'Evidence', icon: FileStack },
+  { to: '/dashboard/timeline', label: 'Timeline', icon: History },
+  { to: '/dashboard/disclosures', label: 'Disclosures', icon: Send },
+  { to: '/dashboard/activity', label: 'Activity', icon: Activity },
+  { to: '/dashboard/settings', label: 'Settings', icon: Settings },
 ]
 
 export function AppShell() {
@@ -28,7 +28,7 @@ export function AppShell() {
 
   const handleLogout = () => {
     logoutMutation.mutate(undefined, {
-      onSuccess: () => navigate('/login', { replace: true }),
+      onSuccess: () => navigate('/', { replace: true }),
     })
   }
 
@@ -65,7 +65,9 @@ export function AppShell() {
           <div className="flex items-center justify-between gap-2 border-t border-shield-200 px-4 py-3">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-shield-900">{user.display_name}</p>
-              <p className="truncate text-xs text-shield-400">{user.email}</p>
+              <p className="truncate font-mono text-xs text-shield-400">
+                {user.vault_id ?? user.email}
+              </p>
             </div>
             <button
               type="button"
