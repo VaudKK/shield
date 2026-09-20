@@ -41,3 +41,30 @@ func (s *TesseractService) ExtractText(_ context.Context, data []byte, mimeType 
 
 	return Result{Text: strings.TrimSpace(text), Applicable: true}, nil
 }
+
+// ExtractWordBoxes locates each recognized word's pixel position, enabling
+// true pixel redaction (drawing over PII where it actually appears) rather
+// than redacting only a text transcript.
+func (s *TesseractService) ExtractWordBoxes(_ context.Context, data []byte, mimeType string) ([]BoxedWord, error) {
+	if !strings.HasPrefix(mimeType, "image/") {
+		return nil, nil
+	}
+
+	client := gosseract.NewClient()
+	defer client.Close()
+
+	if err := client.SetImageFromBytes(data); err != nil {
+		return nil, fmt.Errorf("load image for OCR: %w", err)
+	}
+
+	boxes, err := client.GetBoundingBoxes(gosseract.RIL_WORD)
+	if err != nil {
+		return nil, fmt.Errorf("get word boxes: %w", err)
+	}
+
+	out := make([]BoxedWord, len(boxes))
+	for i, b := range boxes {
+		out[i] = BoxedWord{Text: b.Word, Rect: b.Box}
+	}
+	return out, nil
+}

@@ -40,8 +40,9 @@ type TimelineEvent struct {
 type PIIDetectionMethod string
 
 const (
-	PIIDetectionMethodRegex PIIDetectionMethod = "regex"
-	PIIDetectionMethodAI    PIIDetectionMethod = "ai"
+	PIIDetectionMethodRegex  PIIDetectionMethod = "regex"
+	PIIDetectionMethodAI     PIIDetectionMethod = "ai"
+	PIIDetectionMethodManual PIIDetectionMethod = "manual"
 )
 
 type PIIStatus string
@@ -61,4 +62,13 @@ type PIIDetection struct {
 	DetectionMethod PIIDetectionMethod
 	Status          PIIStatus
 	CreatedAt       time.Time
+}
+
+type Redaction struct {
+	ID             uuid.UUID
+	EvidenceID     uuid.UUID
+	EvidenceFileID uuid.UUID
+	PIIDetectionID uuid.UUID
+	Applied        bool
+	CreatedAt      time.Time
 }

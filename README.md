@@ -11,9 +11,9 @@ violence, harassment, corruption, or other incidents.
 
 ## Status
 
-This repository is being built in phases. **Phases 1–5 (Foundation,
-Authentication & Security, Evidence Upload, Content Safety, OCR & AI) are
-complete.** See
+This repository is being built in phases. **Phases 1–6 (Foundation,
+Authentication & Security, Evidence Upload, Content Safety, OCR & AI,
+Redaction) are complete.** See
 [Development approach](#development-approach) below for what's implemented
 and what's next.
 
@@ -91,6 +91,13 @@ Responses API with Structured Outputs for summaries, timelines, and gap
 analysis; deterministic regex PII detection as a backstop the AI can't
 silently override.
 
+**Redaction:** real pixel-level redaction for images — Tesseract's word
+bounding boxes locate exactly where an accepted PII value sits on the page,
+and a black rectangle is drawn over that region — plus a redacted text
+transcript for PDFs (see [Redaction](#redaction) for why those aren't the
+same guarantee). The original file is never touched; a redaction always
+creates a new derived file.
+
 ## Security architecture
 
 - **Authentication:** email/password with bcrypt (cost 12). Sessions are
@@ -139,6 +146,11 @@ silently override.
   nonexistent ID, so the API never confirms or denies what other users have.
 - Deletion is a soft delete (`deleted_at`), preserving the audit trail rather
   than destroying records.
+- **Redaction:** the original file is never modified or replaced — every
+  redaction produces a new `evidence_files` row (`kind: redacted`) under
+  `redacted/`, linked back to the same evidence. Only PII the user has
+  explicitly accepted is ever covered; rejecting an item guarantees it's
+  left alone on the next redaction run.
 - Structured logging never includes raw evidence content, passwords, session
   tokens, API keys, or sensitive PII.
 - Secrets are only ever read from environment variables and are never
@@ -180,6 +192,38 @@ it's a precise pattern match rather than a paraphrase.
 
 The OpenAI API key is a backend-only secret and is never exposed to the
 frontend.
+
+## Redaction
+
+The review workflow: `GET /evidence/:id/pii` lists everything detected (plus
+anything added manually); `PATCH .../pii/:piiID` records an accept/reject
+decision; `POST .../redact` produces a new derived file covering everything
+currently accepted. Nothing is redacted until the user explicitly accepts
+it — rejecting an item is a real guarantee it stays out of the next
+redaction, not just a UI state.
+
+**Images get true pixel redaction, not a text-only redaction.** Tesseract's
+`GetBoundingBoxes(RIL_WORD)` gives the exact pixel position of every
+recognized word; `internal/redaction` matches each accepted PII value
+against a single word or a run of up to 4 consecutive words (case-insensitive,
+punctuation-trimmed — see `findRegions` in `internal/redaction/
+imageredact.go`), unions their rectangles, and draws solid black boxes over
+them with `image/draw`. The result is always re-encoded as PNG regardless of
+the original format (JPEG/PNG/WEBP), since a derived, already-modified copy
+gains nothing from preserving lossy compression. A value that can't be
+located in the OCR word list (recognition is imperfect, or a manually-added
+value doesn't literally appear in the image) is recorded as **not applied**
+rather than silently dropped or falsely claimed as redacted — visible in the
+API response and worth checking before treating a redacted image as safe to
+share.
+
+**PDFs get a redacted text transcript, not a visually redacted document.**
+Covering the actual rendered content of a PDF in place needs a proper
+PDF-editing library — out of scope for this MVP. Instead, accepted PII
+values are replaced with `[REDACTED]` in the extracted OCR text
+(`evidence_analysis.ocr_text`) and that transcript is stored as the derived
+file. This is a real, useful redaction of the *text*, but it is explicitly
+not the same guarantee as the image path, and the UI doesn't imply otherwise.
 
 ## Local development
 
@@ -294,7 +338,8 @@ To add a migration, create a new numbered `.sql` file in that directory and
 restart the server (or redeploy). So far: `0001_init.sql` (extensions,
 `users`), `0002_sessions.sql` (server-side session store), `0003_evidence.sql`
 (`evidence`, `evidence_files`, append-only `audit_events`), `0004_analysis.sql`
-(`evidence_analysis`, `timeline_events`, `pii_detections`).
+(`evidence_analysis`, `timeline_events`, `pii_detections`), `0005_redactions.sql`
+(`redactions`, and widens `pii_detections.detection_method` to allow `manual`).
 
 ## Running tests
 
@@ -408,10 +453,13 @@ Implemented so far:
 | `GET` | `/api/v1/evidence/:id/analysis` | session | Most recent summary, gaps, timeline, and PII (`404` if not yet analyzed) |
 | `GET` | `/api/v1/evidence/:id/timeline` | session | Just the timeline |
 | `GET` | `/api/v1/evidence/:id/pii` | session | Just the detected PII |
+| `POST` | `/api/v1/evidence/:id/pii` | session + CSRF | Add a manual PII entry (defaults to accepted) |
+| `PATCH` | `/api/v1/evidence/:id/pii/:piiID` | session + CSRF | Accept or reject a detected/manual PII item |
+| `POST` | `/api/v1/evidence/:id/redact` | session + CSRF | Create a new redacted copy covering every currently-accepted item |
 | `GET` | `/api/v1/audit/:evidenceID` | session | Append-only audit trail for one piece of evidence |
 
-The full planned surface (redaction, disclosures) is documented as it's
-implemented in later phases; see the phase plan below for the target shape.
+The full planned surface (disclosures) is documented as it's implemented in
+later phases; see the phase plan below for the target shape.
 
 Errors use a consistent envelope and never leak internal details:
 
@@ -489,7 +537,23 @@ check, doc updates, and a commit before moving on.
       API — the AI step visibly and correctly degrades rather than failing,
       but a valid key is needed to see actual model output; see
       [OpenAI setup](#openai-setup).
-- [ ] Phase 6 — Redaction
+- [x] **Phase 6 — Redaction:** review workflow (accept/reject detected PII,
+      add manual entries) and a "create redacted copy" action
+      (`internal/redaction`) that never modifies the original. Images get
+      real pixel redaction — Tesseract word bounding boxes locate accepted
+      values and a solid black box is drawn over their actual position, not
+      a placeholder blur. PDFs get a redacted text transcript, an explicitly
+      lesser (but honestly labeled) guarantee, since true in-place PDF
+      redaction needs a heavier PDF-editing stack this MVP doesn't include.
+      Verified live through the real Docker image (cgo Tesseract, not
+      mocked): accepted an email, rejected a phone number, generated a
+      redacted PNG, downloaded it, and visually confirmed the email was
+      precisely blacked out while the rejected phone number and everything
+      else remained untouched — screenshot-verified, not just an API
+      response check. The PDF transcript path and the full accept/reject/
+      manual-add/redact flow are additionally covered by an automated
+      integration test against real Postgres and S3.
+- [ ] Phase 7 — Controlled disclosure
 - [ ] Phase 7 — Controlled disclosure
 - [ ] Phase 8 — Polish
 - [ ] Phase 9 — Testing & hardening

@@ -58,7 +58,7 @@ func NewS3Storage(ctx context.Context, cfg S3Config) (*S3Storage, error) {
 	}, nil
 }
 
-func (s *S3Storage) PutOriginal(ctx context.Context, key string, body io.Reader, contentType string) error {
+func (s *S3Storage) Put(ctx context.Context, key string, body io.Reader, contentType string) error {
 	_, err := s.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),

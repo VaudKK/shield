@@ -10,6 +10,7 @@ import (
 	"github.com/VaudKK/shield/backend/internal/auth"
 	"github.com/VaudKK/shield/backend/internal/evidence"
 	"github.com/VaudKK/shield/backend/internal/ratelimit"
+	"github.com/VaudKK/shield/backend/internal/redaction"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -21,9 +22,10 @@ type Server struct {
 	Logger *slog.Logger
 	Env    string
 
-	Auth     *auth.Service
-	Evidence *evidence.Service
-	Analysis *analysis.Service
+	Auth      *auth.Service
+	Evidence  *evidence.Service
+	Analysis  *analysis.Service
+	Redaction *redaction.Service
 
 	// AuthRateLimiter throttles the unauthenticated auth endpoints
 	// (register/login), which are the most attractive brute-force targets.
@@ -83,6 +85,9 @@ func (s *Server) Router() http.Handler {
 			r.Get("/{id}/analysis", s.handleGetEvidenceAnalysis)
 			r.Get("/{id}/timeline", s.handleGetEvidenceTimeline)
 			r.Get("/{id}/pii", s.handleGetEvidencePII)
+			r.With(requireCSRF).Post("/{id}/pii", s.handleAddManualPII)
+			r.With(requireCSRF).Patch("/{id}/pii/{piiID}", s.handleReviewPII)
+			r.With(requireCSRF).Post("/{id}/redact", s.handleRedactEvidence)
 		})
 
 		r.With(s.requireAuth).Get("/audit/{evidenceID}", s.handleEvidenceAudit)

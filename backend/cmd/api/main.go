@@ -21,6 +21,7 @@ import (
 	"github.com/VaudKK/shield/backend/internal/httpapi"
 	"github.com/VaudKK/shield/backend/internal/ocr"
 	"github.com/VaudKK/shield/backend/internal/ratelimit"
+	"github.com/VaudKK/shield/backend/internal/redaction"
 	"github.com/VaudKK/shield/backend/internal/repository"
 	"github.com/VaudKK/shield/backend/internal/storage"
 )
@@ -123,6 +124,17 @@ func run(logger *slog.Logger) error {
 		aiService,
 	)
 
+	redactionService := redaction.NewService(
+		repository.NewEvidenceRepository(pool),
+		repository.NewEvidenceFileRepository(pool),
+		repository.NewAuditRepository(pool),
+		repository.NewPIIRepository(pool),
+		repository.NewRedactionRepository(pool),
+		repository.NewAnalysisRepository(pool),
+		objectStorage,
+		ocrService,
+	)
+
 	server := &httpapi.Server{
 		Pool:                pool,
 		Logger:              logger,
@@ -130,6 +142,7 @@ func run(logger *slog.Logger) error {
 		Auth:                authService,
 		Evidence:            evidenceService,
 		Analysis:            analysisService,
+		Redaction:           redactionService,
 		AuthRateLimiter:     authLimiter,
 		UploadRateLimiter:   uploadLimiter,
 		AnalysisRateLimiter: analysisLimiter,

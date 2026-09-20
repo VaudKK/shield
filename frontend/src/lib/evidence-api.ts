@@ -10,6 +10,7 @@ export interface EvidenceFile {
   size_bytes: number
   sha256: string
   created_at: string
+  url?: string
 }
 
 export interface Evidence {
@@ -99,4 +100,27 @@ export function getEvidenceTimeline(id: string) {
 
 export function getEvidencePII(id: string) {
   return apiFetch<PIIDetection[]>(`/evidence/${id}/pii`)
+}
+
+export function reviewPII(evidenceId: string, piiId: string, status: 'accepted' | 'rejected') {
+  return apiFetch<PIIDetection>(`/evidence/${evidenceId}/pii/${piiId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  })
+}
+
+export function addManualPII(evidenceId: string, input: { type: string; value: string; location?: string }) {
+  return apiFetch<PIIDetection>(`/evidence/${evidenceId}/pii`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export interface RedactionResult {
+  file: EvidenceFile
+  redactions: { pii_detection_id: string; applied: boolean }[]
+}
+
+export function redactEvidence(id: string) {
+  return apiFetch<RedactionResult>(`/evidence/${id}/redact`, { method: 'POST' })
 }

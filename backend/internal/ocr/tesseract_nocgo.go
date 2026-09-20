@@ -24,3 +24,10 @@ func (s *TesseractService) ExtractText(_ context.Context, _ []byte, mimeType str
 	}
 	return Result{}, fmt.Errorf("OCR is unavailable: this build was compiled without cgo/Tesseract support")
 }
+
+func (s *TesseractService) ExtractWordBoxes(_ context.Context, _ []byte, mimeType string) ([]BoxedWord, error) {
+	if !strings.HasPrefix(mimeType, "image/") {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("OCR is unavailable: this build was compiled without cgo/Tesseract support")
+}

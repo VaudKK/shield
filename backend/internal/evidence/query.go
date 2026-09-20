@@ -11,13 +11,15 @@ import (
 type Detail struct {
 	Evidence    *domain.Evidence
 	Files       []domain.EvidenceFile
-	OriginalURL string // short-lived signed URL for the original file, if any
+	OriginalURL string               // short-lived signed URL for the original file, if any
+	FileURLs    map[uuid.UUID]string // short-lived signed URL per file ID, for original and redacted kinds
 }
 
-// Get loads an evidence record owned by ownerID, presigns a short-lived URL
-// for its original file, and records an EVIDENCE_VIEWED audit event. It
-// returns domain.ErrNotFound if the evidence doesn't exist or isn't owned
-// by ownerID — the two cases are indistinguishable to the caller.
+// Get loads an evidence record owned by ownerID, presigns short-lived URLs
+// for its original and any redacted files, and records an EVIDENCE_VIEWED
+// audit event. It returns domain.ErrNotFound if the evidence doesn't exist
+// or isn't owned by ownerID — the two cases are indistinguishable to the
+// caller.
 func (s *Service) Get(ctx context.Context, id, ownerID uuid.UUID) (*Detail, error) {
 	ev, err := s.evidence.GetByIDForOwner(ctx, id, ownerID)
 	if err != nil {
@@ -29,18 +31,20 @@ func (s *Service) Get(ctx context.Context, id, ownerID uuid.UUID) (*Detail, erro
 		return nil, fmt.Errorf("list evidence files: %w", err)
 	}
 
-	detail := &Detail{Evidence: ev, Files: files}
+	detail := &Detail{Evidence: ev, Files: files, FileURLs: make(map[uuid.UUID]string)}
 
 	for _, f := range files {
-		if f.Kind != domain.EvidenceFileKindOriginal {
+		if f.Kind != domain.EvidenceFileKindOriginal && f.Kind != domain.EvidenceFileKindRedacted {
 			continue
 		}
 		url, err := s.storage.PresignGet(ctx, f.StorageKey, SignedURLTTL)
 		if err != nil {
-			return nil, fmt.Errorf("presign original file: %w", err)
+			return nil, fmt.Errorf("presign %s file: %w", f.Kind, err)
 		}
-		detail.OriginalURL = url
-		break
+		detail.FileURLs[f.ID] = url
+		if f.Kind == domain.EvidenceFileKindOriginal && detail.OriginalURL == "" {
+			detail.OriginalURL = url
+		}
 	}
 
 	actor := ownerID

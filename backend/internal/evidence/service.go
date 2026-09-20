@@ -102,7 +102,7 @@ func (s *Service) Upload(ctx context.Context, ownerID uuid.UUID, title string, f
 
 	tee := io.TeeReader(file, io.MultiWriter(writers...))
 
-	if err := s.storage.PutOriginal(ctx, storageKey, tee, mimeType); err != nil {
+	if err := s.storage.Put(ctx, storageKey, tee, mimeType); err != nil {
 		return nil, fmt.Errorf("store original: %w", err)
 	}
 

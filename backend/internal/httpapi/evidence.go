@@ -19,6 +19,7 @@ type evidenceFileResponse struct {
 	SizeBytes        int64  `json:"size_bytes"`
 	SHA256           string `json:"sha256"`
 	CreatedAt        string `json:"created_at"`
+	URL              string `json:"url,omitempty"`
 }
 
 type evidenceResponse struct {
@@ -135,7 +136,9 @@ func (s *Server) handleGetEvidence(w http.ResponseWriter, r *http.Request) {
 	resp.OriginalURL = detail.OriginalURL
 	resp.Files = make([]evidenceFileResponse, len(detail.Files))
 	for i, f := range detail.Files {
-		resp.Files[i] = toEvidenceFileResponse(f)
+		fileResp := toEvidenceFileResponse(f)
+		fileResp.URL = detail.FileURLs[f.ID]
+		resp.Files[i] = fileResp
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

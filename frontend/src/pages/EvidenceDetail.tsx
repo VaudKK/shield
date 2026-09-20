@@ -11,13 +11,22 @@ import {
   Sparkles,
   History,
   UserRound,
+  Check,
+  X,
+  Plus,
+  ShieldOff,
 } from 'lucide-react'
 import {
+  addManualPII,
   analyzeEvidence,
   deleteEvidence,
   getEvidence,
   getEvidenceAnalysis,
   getEvidenceAudit,
+  getEvidencePII,
+  redactEvidence,
+  reviewPII,
+  type PIIDetection,
 } from '@/lib/evidence-api'
 import { ApiError } from '@/lib/api'
 import { StatusBadge } from '@/components/StatusBadge'
@@ -67,6 +76,39 @@ export function EvidenceDetail() {
     mutationFn: () => analyzeEvidence(id!),
     onSuccess: (result) => {
       queryClient.setQueryData(['evidence', id, 'analysis'], result)
+      queryClient.setQueryData(['evidence', id, 'pii'], result.pii)
+      queryClient.invalidateQueries({ queryKey: ['evidence', id, 'audit'] })
+    },
+  })
+
+  const { data: piiItems } = useQuery({
+    queryKey: ['evidence', id, 'pii'],
+    queryFn: () => getEvidencePII(id!),
+    enabled: !!id,
+  })
+
+  const [manualType, setManualType] = useState('')
+  const [manualValue, setManualValue] = useState('')
+
+  const reviewMutation = useMutation({
+    mutationFn: ({ piiId, status }: { piiId: string; status: 'accepted' | 'rejected' }) =>
+      reviewPII(id!, piiId, status),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['evidence', id, 'pii'] }),
+  })
+
+  const addManualMutation = useMutation({
+    mutationFn: () => addManualPII(id!, { type: manualType, value: manualValue }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['evidence', id, 'pii'] })
+      setManualType('')
+      setManualValue('')
+    },
+  })
+
+  const redactMutation = useMutation({
+    mutationFn: () => redactEvidence(id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['evidence', id] })
       queryClient.invalidateQueries({ queryKey: ['evidence', id, 'audit'] })
     },
   })
@@ -90,6 +132,7 @@ export function EvidenceDetail() {
   }
 
   const originalFile = evidence.files?.find((f) => f.kind === 'original')
+  const redactedFiles = evidence.files?.filter((f) => f.kind === 'redacted') ?? []
   const isImage = originalFile?.mime_type.startsWith('image/')
   const isSensitive = evidence.status === 'sensitive'
   const canShowPreview = isImage && evidence.original_url && (!isSensitive || revealed)
@@ -257,22 +300,116 @@ export function EvidenceDetail() {
         </div>
       )}
 
-      {analysis && analysis.pii.length > 0 && (
+      {piiItems && piiItems.length > 0 && (
         <div className="mb-6 rounded-lg border border-shield-200 bg-white p-5">
           <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-shield-900">
             <UserRound className="h-4 w-4 text-shield-500" strokeWidth={1.75} />
-            Privacy — {analysis.pii.length} item{analysis.pii.length === 1 ? '' : 's'} detected
+            Privacy — {piiItems.length} item{piiItems.length === 1 ? '' : 's'} detected
           </h2>
+          <p className="mb-3 text-xs text-shield-400">
+            Review each item below. Accepted items are covered when you create a redacted copy;
+            rejected items are left as-is.
+          </p>
           <ul className="space-y-2">
-            {analysis.pii.map((p) => (
-              <li key={p.id} className="flex items-center justify-between gap-3 text-sm">
+            {piiItems.map((p) => (
+              <PIIRow
+                key={p.id}
+                item={p}
+                onReview={(status) => reviewMutation.mutate({ piiId: p.id, status })}
+                pending={reviewMutation.isPending && reviewMutation.variables?.piiId === p.id}
+              />
+            ))}
+          </ul>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (manualType.trim() && manualValue.trim()) addManualMutation.mutate()
+            }}
+            className="mt-4 flex flex-wrap items-end gap-2 border-t border-shield-100 pt-4"
+          >
+            <div className="flex-1">
+              <label className="mb-1 block text-xs text-shield-500">Type</label>
+              <input
+                type="text"
+                value={manualType}
+                onChange={(e) => setManualType(e.target.value)}
+                placeholder="e.g. name"
+                className="w-full rounded-md border border-shield-200 px-2 py-1.5 text-sm outline-none focus:border-shield-500"
+              />
+            </div>
+            <div className="flex-[2]">
+              <label className="mb-1 block text-xs text-shield-500">Value</label>
+              <input
+                type="text"
+                value={manualValue}
+                onChange={(e) => setManualValue(e.target.value)}
+                placeholder="e.g. Jane Doe"
+                className="w-full rounded-md border border-shield-200 px-2 py-1.5 text-sm outline-none focus:border-shield-500"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={addManualMutation.isPending}
+              className="flex items-center gap-1 rounded-md border border-shield-300 px-3 py-1.5 text-sm font-medium text-shield-800 hover:bg-shield-50 disabled:opacity-60"
+            >
+              <Plus className="h-4 w-4" strokeWidth={1.75} />
+              Add
+            </button>
+          </form>
+
+          <div className="mt-4 border-t border-shield-100 pt-4">
+            <button
+              type="button"
+              onClick={() => redactMutation.mutate()}
+              disabled={redactMutation.isPending || !piiItems.some((p) => p.status === 'accepted')}
+              className="flex items-center gap-2 rounded-md bg-shield-800 px-3 py-2 text-sm font-medium text-white hover:bg-shield-900 disabled:opacity-50"
+            >
+              <ShieldOff className="h-4 w-4" strokeWidth={1.75} />
+              {redactMutation.isPending ? 'Creating redacted copy…' : 'Create redacted copy'}
+            </button>
+            {redactMutation.isError && (
+              <p className="mt-2 text-sm text-status-rejected">
+                {redactMutation.error instanceof ApiError
+                  ? redactMutation.error.message
+                  : 'Redaction failed. Please try again.'}
+              </p>
+            )}
+            {redactMutation.isSuccess && (
+              <p className="mt-2 text-sm text-status-safe">
+                Redacted copy created — see it under Redacted copies below.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {redactedFiles.length > 0 && (
+        <div className="mb-6 rounded-lg border border-shield-200 bg-white p-5">
+          <h2 className="mb-3 text-sm font-semibold text-shield-900">Redacted copies</h2>
+          <p className="mb-3 text-xs text-shield-400">
+            The original file above is never modified. Each redacted copy is a separate derived
+            file.
+          </p>
+          <ul className="space-y-2">
+            {redactedFiles.map((f) => (
+              <li key={f.id} className="flex items-center justify-between gap-3 text-sm">
                 <div className="min-w-0">
-                  <span className="font-medium text-shield-900">{p.type}</span>{' '}
-                  <span className="text-shield-600">{p.value}</span>
+                  <p className="truncate text-shield-900">{f.original_filename}</p>
+                  <p className="text-xs text-shield-400">
+                    {formatBytes(f.size_bytes)} · {new Date(f.created_at).toLocaleString()}
+                  </p>
                 </div>
-                <span className="shrink-0 rounded-full bg-shield-100 px-2 py-0.5 text-xs text-shield-500">
-                  {p.detection_method}
-                </span>
+                {f.url && (
+                  <a
+                    href={f.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex shrink-0 items-center gap-1 text-sm font-medium text-shield-700 hover:underline"
+                  >
+                    View <ExternalLink className="h-3 w-3" strokeWidth={1.75} />
+                  </a>
+                )}
               </li>
             ))}
           </ul>
@@ -315,4 +452,56 @@ function formatEventType(eventType: string): string {
     .split('_')
     .map((w) => w[0].toUpperCase() + w.slice(1))
     .join(' ')
+}
+
+function PIIRow({
+  item,
+  onReview,
+  pending,
+}: {
+  item: PIIDetection
+  onReview: (status: 'accepted' | 'rejected') => void
+  pending: boolean
+}) {
+  return (
+    <li className="flex items-center justify-between gap-3 text-sm">
+      <div className="min-w-0">
+        <span className="font-medium text-shield-900">{item.type}</span>{' '}
+        <span className="text-shield-600">{item.value}</span>
+        <span className="ml-2 rounded-full bg-shield-100 px-2 py-0.5 text-xs text-shield-500">
+          {item.detection_method}
+        </span>
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {item.status === 'accepted' && (
+          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-status-safe">
+            Accepted
+          </span>
+        )}
+        {item.status === 'rejected' && (
+          <span className="rounded-full bg-shield-100 px-2 py-0.5 text-xs font-medium text-shield-500">
+            Rejected
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => onReview('accepted')}
+          disabled={pending || item.status === 'accepted'}
+          aria-label="Accept"
+          className="rounded-md p-1.5 text-status-safe hover:bg-emerald-50 disabled:opacity-30"
+        >
+          <Check className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onReview('rejected')}
+          disabled={pending || item.status === 'rejected'}
+          aria-label="Reject"
+          className="rounded-md p-1.5 text-status-rejected hover:bg-red-50 disabled:opacity-30"
+        >
+          <X className="h-4 w-4" strokeWidth={1.75} />
+        </button>
+      </div>
+    </li>
+  )
 }
