@@ -21,7 +21,7 @@ func toUserResponse(u *domain.User) userResponse {
 		ID:          u.ID.String(),
 		Email:       u.Email,
 		DisplayName: u.DisplayName,
-		CreatedAt:   u.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:   u.CreatedAt.Format(timeFormat),
 	}
 }
 

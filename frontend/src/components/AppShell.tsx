@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   ShieldCheck,
   LayoutDashboard,
@@ -7,8 +7,10 @@ import {
   Send,
   Activity,
   Settings,
+  LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useCurrentUser, useLogout } from '@/hooks/useAuth'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -20,6 +22,16 @@ const NAV_ITEMS = [
 ]
 
 export function AppShell() {
+  const navigate = useNavigate()
+  const { data: user } = useCurrentUser()
+  const logoutMutation = useLogout()
+
+  const handleLogout = () => {
+    logoutMutation.mutate(undefined, {
+      onSuccess: () => navigate('/login', { replace: true }),
+    })
+  }
+
   return (
     <div className="flex min-h-screen bg-shield-50">
       <aside className="flex w-64 shrink-0 flex-col border-r border-shield-200 bg-white">
@@ -49,6 +61,22 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
+        {user && (
+          <div className="flex items-center justify-between gap-2 border-t border-shield-200 px-4 py-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-shield-900">{user.display_name}</p>
+              <p className="truncate text-xs text-shield-400">{user.email}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              aria-label="Sign out"
+              className="rounded-md p-2 text-shield-400 transition-colors hover:bg-shield-50 hover:text-shield-700"
+            >
+              <LogOut className="h-4 w-4" strokeWidth={1.75} />
+            </button>
+          </div>
+        )}
         <div className="border-t border-shield-200 px-6 py-4 text-xs leading-relaxed text-shield-400">
           Original evidence is preserved privately and never altered.
         </div>

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/VaudKK/shield/backend/internal/auth"
+	"github.com/VaudKK/shield/backend/internal/evidence"
 	"github.com/VaudKK/shield/backend/internal/ratelimit"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -19,11 +20,16 @@ type Server struct {
 	Logger *slog.Logger
 	Env    string
 
-	Auth *auth.Service
+	Auth     *auth.Service
+	Evidence *evidence.Service
 
 	// AuthRateLimiter throttles the unauthenticated auth endpoints
 	// (register/login), which are the most attractive brute-force targets.
 	AuthRateLimiter ratelimit.Limiter
+
+	// UploadRateLimiter throttles evidence uploads per IP, independent of
+	// the auth limiter.
+	UploadRateLimiter ratelimit.Limiter
 
 	AllowedOrigins []string
 	Version        string
@@ -35,7 +41,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(chimiddleware.RequestID)
 	r.Use(requestLogger(s.Logger))
 	r.Use(chimiddleware.Recoverer)
-	r.Use(chimiddleware.Timeout(60 * time.Second))
+	r.Use(chimiddleware.Timeout(120 * time.Second))
 	r.Use(securityHeaders)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   s.AllowedOrigins,
@@ -59,7 +65,18 @@ func (s *Server) Router() http.Handler {
 			})
 		})
 
-		// Evidence, disclosure, and audit routes are added in later phases.
+		r.Route("/evidence", func(r chi.Router) {
+			r.Use(s.requireAuth)
+
+			r.Get("/", s.handleListEvidence)
+			r.With(rateLimit(s.UploadRateLimiter, "UPLOAD_RATE_LIMITED"), requireCSRF).Post("/", s.handleUploadEvidence)
+			r.Get("/{id}", s.handleGetEvidence)
+			r.With(requireCSRF).Delete("/{id}", s.handleDeleteEvidence)
+		})
+
+		r.With(s.requireAuth).Get("/audit/{evidenceID}", s.handleEvidenceAudit)
+
+		// Disclosure routes are added in a later phase.
 	})
 
 	return r

@@ -2,12 +2,21 @@ import { useQuery } from '@tanstack/react-query'
 import { FileStack, ShieldAlert, ShieldCheck, Send, Lock } from 'lucide-react'
 import { StatCard } from '@/components/StatCard'
 import { getHealth } from '@/lib/api'
+import { listEvidence } from '@/lib/evidence-api'
 
 export function Dashboard() {
   const { data: health } = useQuery({
     queryKey: ['health'],
     queryFn: getHealth,
   })
+
+  const { data: evidenceList } = useQuery({
+    queryKey: ['evidence'],
+    queryFn: listEvidence,
+  })
+
+  const reviewCount = evidenceList?.filter((e) => e.status === 'review').length ?? 0
+  const safeCount = evidenceList?.filter((e) => e.status === 'safe').length ?? 0
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-10">
@@ -26,9 +35,9 @@ export function Dashboard() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Evidence" value={0} icon={FileStack} />
-        <StatCard label="Needs Review" value={0} icon={ShieldAlert} tone="warning" />
-        <StatCard label="Protected" value={0} icon={ShieldCheck} tone="success" />
+        <StatCard label="Evidence" value={evidenceList?.length ?? 0} icon={FileStack} />
+        <StatCard label="Needs Review" value={reviewCount} icon={ShieldAlert} tone="warning" />
+        <StatCard label="Protected" value={safeCount} icon={ShieldCheck} tone="success" />
         <StatCard label="Disclosure Packages" value={0} icon={Send} />
       </div>
 

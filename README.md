@@ -11,8 +11,8 @@ violence, harassment, corruption, or other incidents.
 
 ## Status
 
-This repository is being built in phases. **Phases 1–2 (Foundation,
-Authentication & Security) are complete.** See
+This repository is being built in phases. **Phases 1–3 (Foundation,
+Authentication & Security, Evidence Upload) are complete.** See
 [Development approach](#development-approach) below for what's implemented
 and what's next.
 
@@ -104,15 +104,23 @@ classification, OpenAI Responses API for evidence analysis.
 - **Request validation:** JSON bodies are size-limited (1 MiB), decoded with
   unknown fields rejected, and validated field-by-field before touching the
   database.
-- Every evidence write path is designed to go through: auth → rate limiting →
-  request size validation → file type / magic byte validation → quarantine
-  storage → security scan, before any content is trusted (Phase 3).
-- Original evidence files are stored privately; nothing is served via
-  permanent public URLs. Short-lived signed URLs are used where access is
-  required (Phase 3).
+- **Evidence upload:** auth → per-IP rate limiting → request size cap (55 MiB)
+  → magic-byte file-type sniffing (never the client-supplied `Content-Type`)
+  → streamed straight to private object storage. A malware/sensitive-content
+  scan is the next stage in the pipeline (Phase 4); until then, every upload
+  is recorded with `status: quarantined`.
+- Original evidence files are stored privately under `originals/`; nothing is
+  served via permanent public URLs. Reads only ever go through a signed URL
+  with a 5-minute TTL, minted on demand.
 - SHA-256 hashing on ingestion proves whether the *stored file* changed after
   upload — it is never presented as proof that the underlying evidence itself
-  is authentic.
+  is authentic. The hash is computed from the same byte stream that is
+  written to storage (not trusted from the client), via a `TeeReader`.
+- Evidence lookups are always scoped to the requesting user; a request for
+  evidence you don't own returns the same `404 EVIDENCE_NOT_FOUND` as a
+  nonexistent ID, so the API never confirms or denies what other users have.
+- Deletion is a soft delete (`deleted_at`), preserving the audit trail rather
+  than destroying records.
 - Structured logging never includes raw evidence content, passwords, session
   tokens, API keys, or sensitive PII.
 - Secrets are only ever read from environment variables and are never
@@ -212,7 +220,8 @@ applied automatically, in order, on every server startup, and recorded in a
 
 To add a migration, create a new numbered `.sql` file in that directory and
 restart the server (or redeploy). So far: `0001_init.sql` (extensions,
-`users`), `0002_sessions.sql` (server-side session store).
+`users`), `0002_sessions.sql` (server-side session store), `0003_evidence.sql`
+(`evidence`, `evidence_files`, append-only `audit_events`).
 
 ## Running tests
 
@@ -222,11 +231,16 @@ go test ./...
 ```
 
 Most tests are pure unit tests and need nothing running. The auth flow and
-CSRF/rate-limit integration tests additionally run against a real Postgres
-when `TEST_DATABASE_URL` is set (they `t.Skip` otherwise):
+CSRF/rate-limit integration tests run against a real Postgres when
+`TEST_DATABASE_URL` is set; the evidence upload integration test additionally
+needs real S3 credentials (`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`,
+`S3_SECRET_ACCESS_KEY`) and writes/reads/deletes under a throwaway key in
+your actual bucket. All of these `t.Skip` when their prerequisite isn't set:
 
 ```bash
 docker compose up -d postgres
+cd backend
+set -a && source .env && set +a   # loads S3_* and friends
 TEST_DATABASE_URL="postgres://shield:shield@localhost:5433/shield?sslmode=disable" go test ./...
 ```
 
@@ -243,7 +257,11 @@ redacted/
 exports/
 ```
 
-Object storage wiring lands in Phase 3.
+Only `originals/` is used so far. The S3 client (`internal/storage`) talks
+path-style S3 with a configurable endpoint, so it works against Tigris,
+MinIO, or AWS S3 itself — set `S3_ENDPOINT` to the provider's endpoint (or
+leave it unset for AWS). The bucket must already exist; Shield never creates
+or configures one.
 
 ## NudeNet setup
 
@@ -269,10 +287,15 @@ Implemented so far:
 | `POST` | `/api/v1/auth/login` | — (rate-limited) | Authenticate, start a session |
 | `GET` | `/api/v1/auth/me` | session | Current user |
 | `POST` | `/api/v1/auth/logout` | session + CSRF | End the current session |
+| `POST` | `/api/v1/evidence/` | session + CSRF, rate-limited | Upload one file as new evidence (multipart: `file`, optional `title`) |
+| `GET` | `/api/v1/evidence/` | session | List your evidence |
+| `GET` | `/api/v1/evidence/:id` | session | Evidence detail, including a signed URL for the original |
+| `DELETE` | `/api/v1/evidence/:id` | session + CSRF | Soft-delete evidence |
+| `GET` | `/api/v1/audit/:evidenceID` | session | Append-only audit trail for one piece of evidence |
 
-The full planned surface (evidence, timeline, PII, redaction, disclosures,
-audit) is documented as it's implemented in later phases; see the phase plan
-below for the target shape.
+The full planned surface (timeline, PII, redaction, disclosures) is
+documented as it's implemented in later phases; see the phase plan below for
+the target shape.
 
 Errors use a consistent envelope and never leak internal details:
 
@@ -311,7 +334,15 @@ check, doc updates, and a commit before moving on.
       double-submit CSRF protection, per-IP rate limiting on `/auth/*`,
       request validation, security headers. Tests cover the middleware and
       the full register → login → logout flow against a real database.
-- [ ] Phase 3 — Evidence upload
+- [x] **Phase 3 — Evidence upload:** drag-and-drop upload UI, magic-byte file
+      validation (JPEG/PNG/WEBP/PDF), SHA-256 hashing computed from the same
+      stream written to S3-compatible storage, evidence + file metadata and
+      an append-only audit trail (`EVIDENCE_UPLOADED`, `HASH_CREATED`,
+      `EVIDENCE_VIEWED`, `EVIDENCE_DELETED`) in PostgreSQL, per-user
+      isolation, soft delete, and short-lived (5 min) signed URLs for
+      originals — never a permanent public link. Verified against the real
+      configured S3 bucket (upload → presigned download → hash match) both
+      in an automated integration test and by hand in the browser.
 - [ ] Phase 4 — Content safety (NudeNet)
 - [ ] Phase 5 — OCR & AI
 - [ ] Phase 6 — Redaction

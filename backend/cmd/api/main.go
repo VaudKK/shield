@@ -14,9 +14,11 @@ import (
 	"github.com/VaudKK/shield/backend/internal/auth"
 	"github.com/VaudKK/shield/backend/internal/config"
 	"github.com/VaudKK/shield/backend/internal/db"
+	"github.com/VaudKK/shield/backend/internal/evidence"
 	"github.com/VaudKK/shield/backend/internal/httpapi"
 	"github.com/VaudKK/shield/backend/internal/ratelimit"
 	"github.com/VaudKK/shield/backend/internal/repository"
+	"github.com/VaudKK/shield/backend/internal/storage"
 )
 
 var version = "dev"
@@ -60,22 +62,46 @@ func run(logger *slog.Logger) error {
 	// for a real user retrying a typo, tight enough to slow brute forcing.
 	authLimiter := ratelimit.NewInMemoryLimiter(10, time.Minute, 5)
 
+	// 20 uploads per minute per IP, generous enough for a real session
+	// adding several pieces of evidence in a row.
+	uploadLimiter := ratelimit.NewInMemoryLimiter(20, time.Minute, 10)
+
+	objectStorage, err := storage.NewS3Storage(ctx, storage.S3Config{
+		Endpoint:  cfg.S3Endpoint,
+		Region:    cfg.S3Region,
+		Bucket:    cfg.S3Bucket,
+		AccessKey: cfg.S3AccessKey,
+		SecretKey: cfg.S3SecretKey,
+	})
+	if err != nil {
+		return err
+	}
+
+	evidenceService := evidence.NewService(
+		repository.NewEvidenceRepository(pool),
+		repository.NewEvidenceFileRepository(pool),
+		repository.NewAuditRepository(pool),
+		objectStorage,
+	)
+
 	server := &httpapi.Server{
-		Pool:            pool,
-		Logger:          logger,
-		Env:             cfg.Env,
-		Auth:            authService,
-		AuthRateLimiter: authLimiter,
-		AllowedOrigins:  cfg.CORSAllowedOrigins,
-		Version:         version,
+		Pool:              pool,
+		Logger:            logger,
+		Env:               cfg.Env,
+		Auth:              authService,
+		Evidence:          evidenceService,
+		AuthRateLimiter:   authLimiter,
+		UploadRateLimiter: uploadLimiter,
+		AllowedOrigins:    cfg.CORSAllowedOrigins,
+		Version:           version,
 	}
 
 	httpServer := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           server.Router(),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
+		ReadTimeout:       120 * time.Second,
+		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
