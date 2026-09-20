@@ -19,12 +19,27 @@ services:
       timeout: 5s
       retries: 10
 
+  nudenet:
+    build:
+      context: ./nudenet-service
+    restart: unless-stopped
+    ports:
+      - '8000:8000'
+    healthcheck:
+      test: ['CMD', 'python', '-c', 'import urllib.request; urllib.request.urlopen("http://localhost:8000/health")']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   backend:
     build:
       context: ./backend
     restart: unless-stopped
     depends_on:
       postgres:
+        condition: service_healthy
+      nudenet:
         condition: service_healthy
     env_file:
       - ./backend/.env
@@ -33,6 +48,7 @@ services:
       # than whatever backend/.env has for bare-metal local development.
       DATABASE_URL: postgres://shield:shield@postgres:5432/shield?sslmode=disable
       CORS_ALLOWED_ORIGINS: http://localhost:5173
+      NUDENET_SERVICE_URL: http://nudenet:8000
     ports:
       - '8080:8080'
 

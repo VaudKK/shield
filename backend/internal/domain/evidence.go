@@ -48,15 +48,16 @@ type EvidenceFile struct {
 }
 
 const (
-	AuditEventEvidenceUploaded    = "EVIDENCE_UPLOADED"
-	AuditEventHashCreated         = "HASH_CREATED"
-	AuditEventEvidenceViewed      = "EVIDENCE_VIEWED"
-	AuditEventEvidenceDeleted     = "EVIDENCE_DELETED"
-	AuditEventOCRCompleted        = "OCR_COMPLETED"
-	AuditEventAIAnalysisCompleted = "AI_ANALYSIS_COMPLETED"
-	AuditEventPIIDetected         = "PII_DETECTED"
-	AuditEventRedactionCreated    = "REDACTION_CREATED"
-	AuditEventExportCreated       = "EXPORT_CREATED"
+	AuditEventEvidenceUploaded     = "EVIDENCE_UPLOADED"
+	AuditEventHashCreated          = "HASH_CREATED"
+	AuditEventEvidenceViewed       = "EVIDENCE_VIEWED"
+	AuditEventEvidenceDeleted      = "EVIDENCE_DELETED"
+	AuditEventContentSafetyChecked = "CONTENT_SAFETY_CHECKED"
+	AuditEventOCRCompleted         = "OCR_COMPLETED"
+	AuditEventAIAnalysisCompleted  = "AI_ANALYSIS_COMPLETED"
+	AuditEventPIIDetected          = "PII_DETECTED"
+	AuditEventRedactionCreated     = "REDACTION_CREATED"
+	AuditEventExportCreated        = "EXPORT_CREATED"
 )
 
 type AuditEvent struct {

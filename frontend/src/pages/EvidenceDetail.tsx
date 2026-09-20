@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ShieldCheck, Trash2, ExternalLink } from 'lucide-react'
+import { ArrowLeft, ShieldCheck, ShieldAlert, Trash2, ExternalLink, Eye } from 'lucide-react'
 import { deleteEvidence, getEvidence, getEvidenceAudit } from '@/lib/evidence-api'
 import { StatusBadge } from '@/components/StatusBadge'
 
@@ -20,6 +21,7 @@ export function EvidenceDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [revealed, setRevealed] = useState(false)
 
   const { data: evidence, isLoading } = useQuery({
     queryKey: ['evidence', id],
@@ -51,6 +53,8 @@ export function EvidenceDetail() {
 
   const originalFile = evidence.files?.find((f) => f.kind === 'original')
   const isImage = originalFile?.mime_type.startsWith('image/')
+  const isSensitive = evidence.status === 'sensitive'
+  const canShowPreview = isImage && evidence.original_url && (!isSensitive || revealed)
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-10">
@@ -73,7 +77,30 @@ export function EvidenceDetail() {
         <StatusBadge status={evidence.status} />
       </div>
 
-      {isImage && evidence.original_url && (
+      {isSensitive && !revealed && (
+        <div className="mb-6 flex flex-col items-center gap-3 rounded-lg border border-status-sensitive/30 bg-orange-50 px-6 py-10 text-center">
+          <ShieldAlert className="h-6 w-6 text-status-sensitive" strokeWidth={1.75} />
+          <p className="text-sm font-medium text-shield-900">
+            This file was flagged as potentially sensitive.
+          </p>
+          <p className="max-w-sm text-xs text-shield-500">
+            Sensitive content can itself be legitimate evidence, so Shield keeps it private and lets
+            you decide whether to view it — it is never deleted automatically.
+          </p>
+          {isImage && evidence.original_url && (
+            <button
+              type="button"
+              onClick={() => setRevealed(true)}
+              className="mt-2 flex items-center gap-2 rounded-md border border-shield-300 bg-white px-3 py-2 text-sm font-medium text-shield-800 hover:bg-shield-50"
+            >
+              <Eye className="h-4 w-4" strokeWidth={1.75} />
+              Reveal image
+            </button>
+          )}
+        </div>
+      )}
+
+      {canShowPreview && (
         <div className="mb-6 overflow-hidden rounded-lg border border-shield-200 bg-shield-50">
           <img src={evidence.original_url} alt={evidence.title} className="max-h-96 w-full object-contain" />
         </div>
@@ -100,7 +127,7 @@ export function EvidenceDetail() {
           This hash shows whether the stored file has changed since upload — it does not prove the
           underlying evidence itself is authentic.
         </p>
-        {evidence.original_url && (
+        {evidence.original_url && (!isSensitive || revealed) && (
           <a
             href={evidence.original_url}
             target="_blank"

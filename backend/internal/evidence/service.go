@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/VaudKK/shield/backend/internal/contentsafety"
 	"github.com/VaudKK/shield/backend/internal/domain"
 	"github.com/VaudKK/shield/backend/internal/repository"
 	"github.com/VaudKK/shield/backend/internal/storage"
@@ -25,10 +27,11 @@ const MaxUploadBytes = 55 << 20 // 55 MiB
 const SignedURLTTL = 5 * time.Minute
 
 type Service struct {
-	evidence *repository.EvidenceRepository
-	files    *repository.EvidenceFileRepository
-	audit    *repository.AuditRepository
-	storage  storage.Storage
+	evidence   *repository.EvidenceRepository
+	files      *repository.EvidenceFileRepository
+	audit      *repository.AuditRepository
+	storage    storage.Storage
+	classifier contentsafety.Classifier // nil disables content-safety classification
 }
 
 func NewService(
@@ -36,8 +39,15 @@ func NewService(
 	filesRepo *repository.EvidenceFileRepository,
 	auditRepo *repository.AuditRepository,
 	store storage.Storage,
+	classifier contentsafety.Classifier,
 ) *Service {
-	return &Service{evidence: evidenceRepo, files: filesRepo, audit: auditRepo, storage: store}
+	return &Service{
+		evidence:   evidenceRepo,
+		files:      filesRepo,
+		audit:      auditRepo,
+		storage:    store,
+		classifier: classifier,
+	}
 }
 
 type UploadResult struct {
@@ -57,12 +67,14 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 
 // Upload validates, hashes, and stores one file as new evidence owned by
 // ownerID. The original bytes are streamed straight to object storage
-// unmodified; only a SHA-256 hash and metadata are computed locally.
+// unmodified; only a SHA-256 hash, metadata, and (for images) an in-memory
+// copy for content-safety classification are computed locally.
 func (s *Service) Upload(ctx context.Context, ownerID uuid.UUID, title string, file multipart.File, filename string) (*UploadResult, error) {
 	mimeType, _, err := sniffAndValidate(file)
 	if err != nil {
 		return nil, err
 	}
+	isImage := strings.HasPrefix(mimeType, "image/")
 
 	if title == "" {
 		title = filename
@@ -78,7 +90,17 @@ func (s *Service) Upload(ctx context.Context, ownerID uuid.UUID, title string, f
 
 	hasher := sha256.New()
 	counter := &countingWriter{}
-	tee := io.TeeReader(file, io.MultiWriter(hasher, counter))
+	writers := []io.Writer{hasher, counter}
+
+	var imageBuf *bytes.Buffer
+	if isImage {
+		// Buffered in memory (bounded by MaxUploadBytes) so classification
+		// doesn't require a second round trip to object storage.
+		imageBuf = &bytes.Buffer{}
+		writers = append(writers, imageBuf)
+	}
+
+	tee := io.TeeReader(file, io.MultiWriter(writers...))
 
 	if err := s.storage.PutOriginal(ctx, storageKey, tee, mimeType); err != nil {
 		return nil, fmt.Errorf("store original: %w", err)
@@ -111,7 +133,61 @@ func (s *Service) Upload(ctx context.Context, ownerID uuid.UUID, title string, f
 		return nil, fmt.Errorf("record hash audit event: %w", err)
 	}
 
+	if imageBuf != nil {
+		ev.Status = s.classifyContentSafety(ctx, ev.ID, imageBuf.Bytes(), filename)
+	} else {
+		// NudeNet only classifies images. PDFs skip straight to "safe" for
+		// content-safety purposes (nudity detection genuinely doesn't apply
+		// to a document), which is recorded explicitly so the audit trail
+		// never implies a scan happened when it didn't.
+		ev.Status = domain.EvidenceStatusSafe
+		if err := s.evidence.UpdateStatus(ctx, ev.ID, ev.Status); err != nil {
+			return nil, fmt.Errorf("update evidence status: %w", err)
+		}
+		_ = s.audit.Record(ctx, ev.ID, domain.AuditEventContentSafetyChecked, nil, map[string]any{
+			"status": string(ev.Status),
+			"note":   "content safety scanning does not apply to non-image file types",
+		})
+	}
+
 	return &UploadResult{Evidence: ev, File: ef}, nil
+}
+
+// classifyContentSafety runs the uploaded image through the content-safety
+// classifier (if one is configured), updates the evidence status, and
+// records an audit event either way. It never returns an error to the
+// caller: a classification failure degrades to "needs review" rather than
+// failing the whole upload, since the evidence is already safely stored.
+func (s *Service) classifyContentSafety(ctx context.Context, evidenceID uuid.UUID, imageBytes []byte, filename string) domain.EvidenceStatus {
+	if s.classifier == nil {
+		// No classifier configured: leave evidence quarantined rather than
+		// claiming a safety verdict nothing actually checked.
+		return domain.EvidenceStatusQuarantined
+	}
+
+	classification, err := s.classifier.Classify(ctx, imageBytes, filename)
+
+	metadata := map[string]any{}
+	if err != nil {
+		metadata["error"] = err.Error()
+	} else {
+		labels := make([]map[string]any, len(classification.Labels))
+		for i, l := range classification.Labels {
+			labels[i] = map[string]any{"label": l.Name, "score": l.Score}
+		}
+		metadata["labels"] = labels
+		metadata["sensitive"] = classification.Sensitive
+	}
+
+	status := contentsafety.DecideStatus(classification)
+	metadata["status"] = string(status)
+
+	if updateErr := s.evidence.UpdateStatus(ctx, evidenceID, status); updateErr != nil {
+		metadata["update_error"] = updateErr.Error()
+	}
+	_ = s.audit.Record(ctx, evidenceID, domain.AuditEventContentSafetyChecked, nil, metadata)
+
+	return status
 }
 
 func extensionFor(filename string) string {

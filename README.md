@@ -11,8 +11,9 @@ violence, harassment, corruption, or other incidents.
 
 ## Status
 
-This repository is being built in phases. **Phases 1–3 (Foundation,
-Authentication & Security, Evidence Upload) are complete.** See
+This repository is being built in phases. **Phases 1–4 (Foundation,
+Authentication & Security, Evidence Upload, Content Safety) are complete.**
+See
 [Development approach](#development-approach) below for what's implemented
 and what's next.
 
@@ -80,8 +81,11 @@ TanStack Query, React Hook Form, Zod, Lucide icons.
 S3-compatible object storage, structured logging (`log/slog`), REST API,
 environment-based configuration. Deployable to Railway.
 
-**Planned (later phases):** NudeNet (self-hosted, Python) for sensitive-content
-classification, OpenAI Responses API for evidence analysis.
+**Content safety:** a self-hosted Python service (FastAPI + NudeNet/ONNX)
+classifies uploaded images for sensitive content; the Go backend owns the
+policy decision, the Python side only reports labels and scores.
+
+**Planned (later phases):** OpenAI Responses API for evidence analysis.
 
 ## Security architecture
 
@@ -106,9 +110,19 @@ classification, OpenAI Responses API for evidence analysis.
   database.
 - **Evidence upload:** auth → per-IP rate limiting → request size cap (55 MiB)
   → magic-byte file-type sniffing (never the client-supplied `Content-Type`)
-  → streamed straight to private object storage. A malware/sensitive-content
-  scan is the next stage in the pipeline (Phase 4); until then, every upload
-  is recorded with `status: quarantined`.
+  → streamed straight to private object storage → content-safety
+  classification (images only).
+- **Content safety:** every uploaded image is classified by the self-hosted
+  NudeNet service before it's marked `safe`. The Go side (`internal/
+  contentsafety`) owns the policy — a `sensitive` verdict from the model
+  always yields `status: sensitive`; a borderline score or a classification
+  failure yields `status: review` rather than quietly defaulting to safe;
+  only a clean result yields `status: safe`. PDFs skip classification
+  outright (NudeNet only understands images) and are marked safe with an
+  explicit audit note that no scan happened, rather than an implied one. A
+  sensitive verdict never deletes or blocks anything — the evidence detail
+  page hides the preview behind an explicit "Reveal image" the user has to
+  click, exactly once, per visit.
 - Original evidence files are stored privately under `originals/`; nothing is
   served via permanent public URLs. Reads only ever go through a signed URL
   with a 5-minute TTL, minted on demand.
@@ -146,7 +160,8 @@ OpenAI API key is a backend-only secret and is never exposed to the frontend.
 - Node.js 20+
 - Go 1.24+ (the module targets a newer point release; `go build`/`go test`
   fetch that toolchain automatically on first use via `GOTOOLCHAIN=auto`)
-- Docker (for PostgreSQL, and optionally the full stack)
+- Python 3.12+ (only if running the content-safety service outside Docker)
+- Docker (for PostgreSQL and NudeNet, and optionally the full stack)
 
 ### Quick start with Docker Compose
 
@@ -156,8 +171,10 @@ docker compose up --build
 
 This starts PostgreSQL (on host port `5433`, to avoid clashing with a
 locally installed Postgres on the default `5432` — the backend container
-always talks to it internally at `postgres:5432`) and the Go API, which
-applies migrations on boot, at `http://localhost:8080`. Then run the
+always talks to it internally at `postgres:5432`), the NudeNet content-safety
+service at `http://localhost:8000`, and the Go API, which applies migrations
+on boot, at `http://localhost:8080`. `docker compose up --build` also waits
+for NudeNet to report healthy before starting the backend. Then run the
 frontend separately:
 
 ```bash
@@ -191,6 +208,18 @@ npm install
 npm run dev
 ```
 
+### Running the content-safety service without Docker
+
+```bash
+cd nudenet-service
+python -m venv .venv
+.venv/Scripts/pip install -r requirements-dev.txt   # .venv/bin/pip on macOS/Linux
+.venv/Scripts/uvicorn app:app --reload --port 8000
+```
+
+Set `NUDENET_SERVICE_URL=http://localhost:8000` in `backend/.env` (already
+the default in `backend/.env.example`).
+
 ## Environment variables
 
 ### Backend (`backend/.env`, see `backend/.env.example`)
@@ -203,6 +232,7 @@ npm run dev
 | `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed origins |
 | `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3-compatible object storage credentials (used from Phase 3) |
 | `OPENAI_API_KEY` | OpenAI API key, backend-only (used from Phase 5) |
+| `NUDENET_SERVICE_URL` | Base URL of the content-safety service. Empty disables classification (uploads stay `quarantined`) |
 | `SESSION_SECRET` | Secret used to sign session cookies (used from Phase 2) |
 
 ### Frontend (`frontend/.env`, see `frontend/.env.example`)
@@ -244,6 +274,15 @@ set -a && source .env && set +a   # loads S3_* and friends
 TEST_DATABASE_URL="postgres://shield:shield@localhost:5433/shield?sslmode=disable" go test ./...
 ```
 
+The content-safety service has its own Python test suite (real model, no
+mocking):
+
+```bash
+cd nudenet-service
+.venv/Scripts/pip install -r requirements-dev.txt
+.venv/Scripts/python -m pytest
+```
+
 ## S3 setup
 
 Shield expects an S3-compatible bucket (Railway object storage, or any
@@ -265,10 +304,29 @@ or configures one.
 
 ## NudeNet setup
 
-NudeNet runs as a separate, self-hosted Python service for sensitive-content
-classification and is introduced in Phase 4. It is a classification aid, not
-a legal, abuse, or CSAM detector, and Shield never automatically deletes
-content it flags.
+NudeNet runs as a separate, self-hosted Python service (`nudenet-service/`,
+FastAPI + the `nudenet` ONNX model) for sensitive-content classification. It
+is a classification aid, not a legal, abuse, or CSAM detector — Shield never
+automatically deletes or blocks content it flags, and the service itself
+makes no policy decisions; it just reports labels and scores back to the Go
+backend, which decides `safe` / `review` / `sensitive` (`internal/
+contentsafety/policy.go`).
+
+`POST /classify` (multipart `file`) returns:
+
+```json
+{
+  "labels": [{ "label": "FEMALE_BREAST_EXPOSED", "score": 0.87 }],
+  "sensitive": true,
+  "max_sensitive_score": 0.87
+}
+```
+
+Only image evidence is classified; PDFs are out of scope for this MVP and
+are marked safe with an audit note explaining that no scan applies, rather
+than silently skipping the check. If the service is unreachable, uploads
+still succeed (the file is already safely stored) but the evidence status
+falls back to `review` instead of `safe`.
 
 ## OpenAI setup
 
@@ -343,7 +401,18 @@ check, doc updates, and a commit before moving on.
       originals — never a permanent public link. Verified against the real
       configured S3 bucket (upload → presigned download → hash match) both
       in an automated integration test and by hand in the browser.
-- [ ] Phase 4 — Content safety (NudeNet)
+- [x] **Phase 4 — Content safety:** a self-hosted NudeNet/FastAPI service
+      (`nudenet-service/`) classifies every uploaded image; the Go side owns
+      the safe/review/sensitive policy decision (`internal/contentsafety`),
+      records a `CONTENT_SAFETY_CHECKED` audit event either way, and never
+      auto-deletes anything. Sensitive evidence is hidden behind an explicit
+      "Reveal image" control in the UI. Verified against the real model (not
+      mocked) via the Python test suite, and live through the full Docker
+      stack: a normal image classifies `safe`, a simulated NudeNet outage
+      degrades new uploads to `review` (never a false `safe`) without
+      failing the upload, and a PDF is marked `safe` with an audit note that
+      content-safety scanning doesn't apply to it. The sensitive-content
+      reveal gate was also driven through the actual browser UI.
 - [ ] Phase 5 — OCR & AI
 - [ ] Phase 6 — Redaction
 - [ ] Phase 7 — Controlled disclosure

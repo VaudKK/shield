@@ -79,6 +79,23 @@ func (r *EvidenceRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID,
 	return out, rows.Err()
 }
 
+// UpdateStatus is not scoped to an owner: it is called by internal
+// pipeline steps (content safety, future AI analysis) acting on behalf of
+// the system, not a specific user's request.
+func (r *EvidenceRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.EvidenceStatus) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE evidence SET status = $2, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id, status)
+	if err != nil {
+		return fmt.Errorf("update evidence status: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 func (r *EvidenceRepository) SoftDelete(ctx context.Context, id, ownerID uuid.UUID) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE evidence SET deleted_at = now(), updated_at = now()

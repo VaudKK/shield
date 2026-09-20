@@ -13,6 +13,7 @@ import (
 
 	"github.com/VaudKK/shield/backend/internal/auth"
 	"github.com/VaudKK/shield/backend/internal/config"
+	"github.com/VaudKK/shield/backend/internal/contentsafety"
 	"github.com/VaudKK/shield/backend/internal/db"
 	"github.com/VaudKK/shield/backend/internal/evidence"
 	"github.com/VaudKK/shield/backend/internal/httpapi"
@@ -77,11 +78,19 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	var classifier contentsafety.Classifier
+	if cfg.NudeNetServiceURL != "" {
+		classifier = contentsafety.NewNudeNetClient(cfg.NudeNetServiceURL)
+	} else {
+		logger.Warn("NUDENET_SERVICE_URL not set; uploaded images will stay quarantined pending manual review")
+	}
+
 	evidenceService := evidence.NewService(
 		repository.NewEvidenceRepository(pool),
 		repository.NewEvidenceFileRepository(pool),
 		repository.NewAuditRepository(pool),
 		objectStorage,
+		classifier,
 	)
 
 	server := &httpapi.Server{

@@ -20,6 +20,11 @@ type Config struct {
 
 	OpenAIAPIKey string
 
+	// NudeNetServiceURL points at the self-hosted content-safety service.
+	// Empty disables content-safety classification: uploads stay
+	// "quarantined" rather than being claimed safe with nothing checked.
+	NudeNetServiceURL string
+
 	CORSAllowedOrigins []string
 
 	SessionSecret string
@@ -36,6 +41,7 @@ func Load() (*Config, error) {
 		S3AccessKey:        os.Getenv("S3_ACCESS_KEY_ID"),
 		S3SecretKey:        os.Getenv("S3_SECRET_ACCESS_KEY"),
 		OpenAIAPIKey:       os.Getenv("OPENAI_API_KEY"),
+		NudeNetServiceURL:  os.Getenv("NUDENET_SERVICE_URL"),
 		SessionSecret:      os.Getenv("SESSION_SECRET"),
 		CORSAllowedOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
 	}
