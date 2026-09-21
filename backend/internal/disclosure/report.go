@@ -23,15 +23,14 @@ type ReportTimelineEntry struct {
 }
 
 type ReportData struct {
-	Title             string
-	GeneratedAt       string
-	Evidence          []ReportEvidence
-	Timeline          []ReportTimelineEntry
-	IncludeSummary    bool
-	IncludeTimeline   bool
-	IncludePhotos     bool
-	Protections       []string
-	FaceBlurRequested bool
+	Title           string
+	GeneratedAt     string
+	Evidence        []ReportEvidence
+	Timeline        []ReportTimelineEntry
+	IncludeSummary  bool
+	IncludeTimeline bool
+	IncludePhotos   bool
+	Protections     []string
 }
 
 var reportTemplate = template.Must(template.New("report").Parse(`<!doctype html>
@@ -70,12 +69,6 @@ var reportTemplate = template.Must(template.New("report").Parse(`<!doctype html>
   <h2>Privacy protections applied</h2>
   <ul>
     {{range .Protections}}<li>{{.}}</li>{{end}}
-    {{if .FaceBlurRequested}}<li>Face blurring was requested but is not available in this version of Shield — no faces were blurred. Review images manually before sharing if this matters.</li>{{end}}
-  </ul>
-  {{else if .FaceBlurRequested}}
-  <h2>Privacy protections applied</h2>
-  <ul>
-    <li>Face blurring was requested but is not available in this version of Shield — no faces were blurred. Review images manually before sharing if this matters.</li>
   </ul>
   {{end}}
 

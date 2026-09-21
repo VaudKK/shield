@@ -326,9 +326,17 @@ shared via `redaction.RedactImageForValues` / `RedactTextForValues`
 `remove_metadata` forces every included image through the same re-encode
 pipeline (stripping EXIF/metadata as a side effect of always re-encoding to
 PNG) even when no PII redaction is otherwise needed for that image.
-`blur_faces` is accepted as an option but **not implemented** in this
-version — no face-detection component exists yet — and the generated
-report says so explicitly rather than silently doing nothing.
+
+`blur_faces` detects faces with `internal/faceblur` (pure-Go, via
+[esimov/pigo](https://github.com/esimov/pigo) — no cgo, no extra Docker
+service) and covers each one with the same solid-black-box primitive PII
+redaction uses (`redaction.RedactRegions`), padded 30% beyond the raw
+detected square so hairline and chin are covered too. Detection runs
+against the original pixels even when PII redaction also ran, so a text
+box drawn elsewhere in the frame can't suppress a face detection. A miss
+(no face found) is reported as such, never silently treated as "nothing to
+protect" — this is a risk signal like content-safety classification, not a
+guarantee, and the report always says to verify manually before sharing.
 
 A package is immutable once created: there's no edit or re-generate
 endpoint, matching "what you reviewed is what gets shared." `GET
@@ -708,11 +716,25 @@ check, doc updates, and a commit before moving on.
       phone numbers, downloaded the actual ZIP, and visually confirmed the
       extracted image had the email precisely blacked out with the phone
       number untouched, plus checked the generated report's protections
-      list, redaction notes, and honest "face blurring not available" note
-      all matched. Also driven through the real browser UI end to end
-      (evidence selection, toggles, package creation, download, list view),
-      and covered by an automated integration test against real Postgres
-      and S3 that inspects the actual ZIP contents.
+      list and redaction notes all matched. Also driven through the real
+      browser UI end to end (evidence selection, toggles, package creation,
+      download, list view), and covered by an automated integration test
+      against real Postgres and S3 that inspects the actual ZIP contents.
+      **Follow-up — real face blurring:** `blur_faces` was originally a
+      toggle with an honest "not available" note (no face detection
+      existed). It's now real: `internal/faceblur` (pure-Go, via
+      `esimov/pigo`, no cgo and no new Docker service) detects faces and
+      covers each one with the same box-drawing primitive PII redaction
+      uses. A first pass at the padding math over-padded and blacked out
+      the *entire* photo on a close-up headshot — caught by actually
+      opening the output image rather than trusting the report's "detected
+      and blurred" note, fixed, and now covered by a regression test
+      asserting a padded region can't cover more than 95% of the frame.
+      Verified live through the real Docker image: uploaded a real photo,
+      created a package with "Blur faces" on, downloaded the ZIP, and
+      visually confirmed the face — and only the face — was blacked out.
+      Also covered by an integration test that decodes both the original
+      and packaged image and asserts the pixels actually changed.
 - [x] **Phase 8 — Polish:** UI/UX and error-handling pass over the frontend
       shell rather than any one feature. Added a top-level React error
       boundary (`components/ErrorBoundary.tsx`) so an unhandled render

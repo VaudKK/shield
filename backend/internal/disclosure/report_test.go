@@ -52,11 +52,14 @@ func TestRenderReport(t *testing.T) {
 	}
 }
 
-func TestRenderReport_FaceBlurNotAvailableNote(t *testing.T) {
+func TestRenderReport_FaceBlurProtectionLabel(t *testing.T) {
 	data := ReportData{
-		Title:             "Test",
-		GeneratedAt:       "now",
-		FaceBlurRequested: true,
+		Title:       "Test",
+		GeneratedAt: "now",
+		Protections: []string{"Faces blurred where detected (automated — always verify manually before sharing)"},
+		Evidence: []ReportEvidence{
+			{Title: "Photo 1", RedactionNotes: []string{"2 face(s) detected and blurred automatically — always visually confirm before sharing."}},
+		},
 	}
 
 	out, err := renderReport(data)
@@ -64,7 +67,11 @@ func TestRenderReport_FaceBlurNotAvailableNote(t *testing.T) {
 		t.Fatalf("renderReport: %v", err)
 	}
 
-	if !strings.Contains(string(out), "not available in this version") {
-		t.Error("expected an honest note that face blurring isn't available, got none")
+	html := string(out)
+	if !strings.Contains(html, "Faces blurred where detected") {
+		t.Error("expected the face-blur protection label in the report")
+	}
+	if !strings.Contains(html, "2 face(s) detected and blurred") {
+		t.Error("expected the per-evidence face-blur note in the report")
 	}
 }

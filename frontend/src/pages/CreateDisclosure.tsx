@@ -23,6 +23,7 @@ export function CreateDisclosure() {
   const [removePhoneNumbers, setRemovePhoneNumbers] = useState(true)
   const [removeEmails, setRemoveEmails] = useState(true)
   const [removeIdNumbers, setRemoveIdNumbers] = useState(true)
+  const [blurFaces, setBlurFaces] = useState(true)
   const [removeMetadata, setRemoveMetadata] = useState(true)
 
   const [result, setResult] = useState<Disclosure | null>(null)
@@ -38,7 +39,7 @@ export function CreateDisclosure() {
         remove_phone_numbers: removePhoneNumbers,
         remove_emails: removeEmails,
         remove_id_numbers: removeIdNumbers,
-        blur_faces: false,
+        blur_faces: blurFaces,
         remove_metadata: removeMetadata,
       }),
     onSuccess: (disclosure) => setResult(disclosure),
@@ -159,10 +160,7 @@ export function CreateDisclosure() {
             <Checkbox label="Remove phone numbers" checked={removePhoneNumbers} onChange={setRemovePhoneNumbers} />
             <Checkbox label="Remove email addresses" checked={removeEmails} onChange={setRemoveEmails} />
             <Checkbox label="Remove ID numbers" checked={removeIdNumbers} onChange={setRemoveIdNumbers} />
-            <label className="flex cursor-not-allowed items-center gap-2 text-shield-400">
-              <input type="checkbox" disabled className="h-4 w-4 rounded border-shield-300" />
-              Blur faces <span className="text-xs">(not available in this version)</span>
-            </label>
+            <Checkbox label="Blur faces" checked={blurFaces} onChange={setBlurFaces} />
             <Checkbox
               label="Remove sensitive file metadata"
               checked={removeMetadata}

@@ -30,6 +30,15 @@ func RedactImageForValues(data []byte, words []ocr.BoxedWord, values []string) (
 	return redacted, applied, nil
 }
 
+// RedactRegions draws black boxes over the given regions and re-encodes the
+// result as PNG. Exported so internal/disclosure can layer face-blur boxes
+// (from internal/faceblur) onto an image using the same drawing primitive
+// PII redaction uses, and so a plain re-encode (regions == nil) can be used
+// to strip file metadata without any boxes drawn.
+func RedactRegions(data []byte, regions []image.Rectangle) ([]byte, error) {
+	return redactImage(data, regions)
+}
+
 // RedactTextForValues replaces every occurrence of each value with
 // "[REDACTED]" and reports which values were actually found.
 func RedactTextForValues(text string, values []string) (string, map[string]bool) {

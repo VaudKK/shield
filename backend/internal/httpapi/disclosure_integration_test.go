@@ -5,9 +5,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg" // decoder registration for image.Decode
+	_ "image/png"  // decoder registration for image.Decode
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -173,8 +178,8 @@ func TestDisclosureFlow_CreateAndDownload(t *testing.T) {
 	if !strings.Contains(reportHTML, "Phone numbers removed") {
 		t.Error("expected the protections list to mention phone numbers were removed")
 	}
-	if !strings.Contains(reportHTML, "not available in this version") {
-		t.Error("expected an honest note that face blurring isn't available")
+	if !strings.Contains(reportHTML, "Faces blurred where detected") {
+		t.Error("expected the protections list to mention the face-blur toggle")
 	}
 
 	// GET and list endpoints should agree.
@@ -236,5 +241,152 @@ func TestDisclosureFlow_CreateAndDownload(t *testing.T) {
 	router.ServeHTTP(delRec, delReq)
 	if delRec.Code != http.StatusNoContent {
 		t.Fatalf("cleanup delete: expected 204, got %d", delRec.Code)
+	}
+}
+
+// TestDisclosureFlow_BlurFacesInImage exercises the real face-blur path
+// end to end: a known photo with a detectable face goes into a package
+// with blur_faces on, and the returned image is checked for both the
+// report's "detected and blurred" note and an actual pixel change at the
+// reported region (not just a passthrough of the original bytes).
+func TestDisclosureFlow_BlurFacesInImage(t *testing.T) {
+	facePhoto, err := os.ReadFile(filepath.Join("..", "faceblur", "testdata", "sample_face.jpg"))
+	if err != nil {
+		t.Fatalf("read face fixture: %v", err)
+	}
+
+	s := newEvidenceTestServer(t)
+	s.Disclosure = disclosure.NewService(
+		repository.NewEvidenceRepository(s.Pool),
+		repository.NewEvidenceFileRepository(s.Pool),
+		repository.NewAnalysisRepository(s.Pool),
+		repository.NewTimelineRepository(s.Pool),
+		repository.NewPIIRepository(s.Pool),
+		repository.NewAuditRepository(s.Pool),
+		repository.NewDisclosureRepository(s.Pool),
+		mustEvidenceStorage(t),
+		nil, // no PII candidates in this test, so word-box OCR is never called
+	)
+
+	router := s.Router()
+	email := fmt.Sprintf("faceblur-%d@example.com", time.Now().UnixNano())
+
+	regBody := fmt.Sprintf(`{"email":%q,"password":"correct-horse-battery","display_name":"Face Blur Tester"}`, email)
+	regReq := httptest.NewRequest("POST", "/api/v1/auth/register", strings.NewReader(regBody))
+	regReq.Header.Set("Content-Type", "application/json")
+	regRec := httptest.NewRecorder()
+	router.ServeHTTP(regRec, regReq)
+	if regRec.Code != http.StatusCreated {
+		t.Fatalf("register: expected 201, got %d: %s", regRec.Code, regRec.Body.String())
+	}
+	sessionCookie, csrfCookie := extractAuthCookies(t, regRec)
+
+	body, contentType := multipartUpload(t, "face.jpg", facePhoto, "Face Photo")
+	uploadReq := httptest.NewRequest("POST", "/api/v1/evidence/", body)
+	uploadReq.Header.Set("Content-Type", contentType)
+	uploadReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	uploadReq.AddCookie(sessionCookie)
+	uploadReq.AddCookie(csrfCookie)
+	uploadRec := httptest.NewRecorder()
+	router.ServeHTTP(uploadRec, uploadReq)
+	if uploadRec.Code != http.StatusCreated {
+		t.Fatalf("upload: expected 201, got %d: %s", uploadRec.Code, uploadRec.Body.String())
+	}
+	var uploaded struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(uploadRec.Body.Bytes(), &uploaded); err != nil {
+		t.Fatalf("decode upload response: %v", err)
+	}
+
+	createBody := fmt.Sprintf(`{
+		"title": "Face Blur Test",
+		"evidence_ids": [%q],
+		"include_photos": true,
+		"blur_faces": true
+	}`, uploaded.ID)
+	createReq := httptest.NewRequest("POST", "/api/v1/disclosures/", strings.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	createReq.AddCookie(sessionCookie)
+	createReq.AddCookie(csrfCookie)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create disclosure: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	var created struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	resp, err := http.Get(created.URL)
+	if err != nil {
+		t.Fatalf("download package: %v", err)
+	}
+	defer resp.Body.Close()
+	zipBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read package body: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	if err != nil {
+		t.Fatalf("open package as zip: %v", err)
+	}
+
+	var reportHTML string
+	var blurredImage []byte
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %s: %v", f.Name, err)
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read zip entry %s: %v", f.Name, err)
+		}
+		if f.Name == "report.html" {
+			reportHTML = string(data)
+		}
+		if strings.HasPrefix(f.Name, "evidence/") {
+			blurredImage = data
+		}
+	}
+
+	if !strings.Contains(reportHTML, "face(s) detected and blurred") {
+		t.Error("expected the report to note that a face was detected and blurred")
+	}
+	if blurredImage == nil {
+		t.Fatal("expected an evidence image in the package")
+	}
+
+	original, _, err := image.Decode(bytes.NewReader(facePhoto))
+	if err != nil {
+		t.Fatalf("decode original fixture: %v", err)
+	}
+	blurred, _, err := image.Decode(bytes.NewReader(blurredImage))
+	if err != nil {
+		t.Fatalf("decode blurred image from package: %v", err)
+	}
+	if original.Bounds() != blurred.Bounds() {
+		t.Fatalf("expected same dimensions, got %v vs %v", original.Bounds(), blurred.Bounds())
+	}
+
+	changed := false
+	b := original.Bounds()
+	for y := b.Min.Y; y < b.Max.Y && !changed; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if original.At(x, y) != blurred.At(x, y) {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		t.Error("expected the packaged image's pixels to differ from the original (face box drawn)")
 	}
 }

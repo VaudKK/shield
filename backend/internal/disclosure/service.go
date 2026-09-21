@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/VaudKK/shield/backend/internal/domain"
+	"github.com/VaudKK/shield/backend/internal/faceblur"
 	"github.com/VaudKK/shield/backend/internal/ocr"
 	"github.com/VaudKK/shield/backend/internal/redaction"
 	"github.com/VaudKK/shield/backend/internal/repository"
@@ -96,13 +97,12 @@ func (s *Service) Create(ctx context.Context, ownerID uuid.UUID, input CreateInp
 	}
 
 	report := ReportData{
-		Title:             input.Title,
-		GeneratedAt:       time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
-		IncludeSummary:    input.IncludeSummary,
-		IncludeTimeline:   input.IncludeTimeline,
-		IncludePhotos:     input.IncludePhotos,
-		FaceBlurRequested: input.BlurFaces,
-		Protections:       protectionLabels(input),
+		Title:           input.Title,
+		GeneratedAt:     time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
+		IncludeSummary:  input.IncludeSummary,
+		IncludeTimeline: input.IncludeTimeline,
+		IncludePhotos:   input.IncludePhotos,
+		Protections:     protectionLabels(input),
 	}
 
 	var zipBuf bytes.Buffer
@@ -212,6 +212,9 @@ func protectionLabels(input CreateInput) []string {
 	if input.RemoveIDNumbers {
 		out = append(out, "ID numbers removed")
 	}
+	if input.BlurFaces {
+		out = append(out, "Faces blurred where detected (automated — always verify manually before sharing)")
+	}
 	if input.RemoveMetadata {
 		out = append(out, "Sensitive file metadata removed from included photos")
 	}
@@ -285,43 +288,79 @@ func (s *Service) buildEvidenceEntry(ctx context.Context, index int, ev *domain.
 	includedName := fmt.Sprintf("%02d-%s", index+1, sanitizeForZip(original.OriginalFilename))
 
 	if isImage {
-		needsRework := len(candidates) > 0 || input.RemoveMetadata
+		needsRework := len(candidates) > 0 || input.RemoveMetadata || input.BlurFaces
 		if !needsRework {
 			reportEv.IncludedAs = includedName
 			return reportEv, data, includedName, nil
 		}
 
-		words, err := s.ocr.ExtractWordBoxes(ctx, data, original.MimeType)
-		if err != nil {
-			reportEv.RedactionNotes = append(reportEv.RedactionNotes,
-				fmt.Sprintf("Could not scan this image for text to redact (%v); included without redaction.", err))
-			reportEv.IncludedAs = includedName
-			return reportEv, data, includedName, nil
-		}
+		working := data
+		reencoded := false
 
-		values := make([]string, len(candidates))
-		for i, c := range candidates {
-			values[i] = c.Value
-		}
-		protected, applied, err := redaction.RedactImageForValues(data, words, values)
-		if err != nil {
-			return ReportEvidence{}, nil, "", fmt.Errorf("redact image %s: %w", ev.ID, err)
-		}
-
-		for _, c := range candidates {
-			if applied[c.Value] {
-				reportEv.RedactionNotes = append(reportEv.RedactionNotes, fmt.Sprintf("%s: redacted", c.Type))
+		if len(candidates) > 0 {
+			words, err := s.ocr.ExtractWordBoxes(ctx, data, original.MimeType)
+			if err != nil {
+				reportEv.RedactionNotes = append(reportEv.RedactionNotes,
+					fmt.Sprintf("Could not scan this image for text to redact (%v); included without text redaction.", err))
 			} else {
-				reportEv.RedactionNotes = append(reportEv.RedactionNotes, fmt.Sprintf("%s: could not be located in the image, not redacted", c.Type))
+				values := make([]string, len(candidates))
+				for i, c := range candidates {
+					values[i] = c.Value
+				}
+				redacted, applied, err := redaction.RedactImageForValues(working, words, values)
+				if err != nil {
+					return ReportEvidence{}, nil, "", fmt.Errorf("redact image %s: %w", ev.ID, err)
+				}
+				working = redacted
+				reencoded = true
+				for _, c := range candidates {
+					if applied[c.Value] {
+						reportEv.RedactionNotes = append(reportEv.RedactionNotes, fmt.Sprintf("%s: redacted", c.Type))
+					} else {
+						reportEv.RedactionNotes = append(reportEv.RedactionNotes, fmt.Sprintf("%s: could not be located in the image, not redacted", c.Type))
+					}
+				}
 			}
 		}
+
+		if input.BlurFaces {
+			// Detect against the original pixels, not an already-redacted
+			// copy — a PII box drawn over part of a face shouldn't affect
+			// whether the face itself is found.
+			faces, err := faceblur.Detect(data)
+			switch {
+			case err != nil:
+				reportEv.RedactionNotes = append(reportEv.RedactionNotes,
+					fmt.Sprintf("Could not scan this image for faces (%v); included without face blurring.", err))
+			case len(faces) == 0:
+				reportEv.RedactionNotes = append(reportEv.RedactionNotes, "No faces detected to blur.")
+			default:
+				blurred, err := redaction.RedactRegions(working, faces)
+				if err != nil {
+					return ReportEvidence{}, nil, "", fmt.Errorf("blur faces in image %s: %w", ev.ID, err)
+				}
+				working = blurred
+				reencoded = true
+				reportEv.RedactionNotes = append(reportEv.RedactionNotes, fmt.Sprintf(
+					"%d face(s) detected and blurred automatically — this is automated detection, always visually confirm before sharing.",
+					len(faces)))
+			}
+		}
+
 		if input.RemoveMetadata {
+			if !reencoded {
+				stripped, err := redaction.RedactRegions(working, nil)
+				if err != nil {
+					return ReportEvidence{}, nil, "", fmt.Errorf("strip metadata from image %s: %w", ev.ID, err)
+				}
+				working = stripped
+			}
 			reportEv.RedactionNotes = append(reportEv.RedactionNotes, "File metadata removed (re-encoded as PNG)")
 		}
 
 		includedName = strings.TrimSuffix(includedName, filepathExt(includedName)) + ".png"
 		reportEv.IncludedAs = includedName
-		return reportEv, protected, includedName, nil
+		return reportEv, working, includedName, nil
 	}
 
 	// Non-image (PDF): embed the original unless a redaction is needed, in
