@@ -40,11 +40,12 @@ func (r *EvidenceRepository) Create(ctx context.Context, ownerID uuid.UUID, titl
 func (r *EvidenceRepository) GetByIDForOwner(ctx context.Context, id, ownerID uuid.UUID) (*domain.Evidence, error) {
 	var e domain.Evidence
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, owner_id, title, status, created_at, updated_at, deleted_at
-		FROM evidence
-		WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL
+		SELECT e.id, e.owner_id, e.title, e.status, e.created_at, e.updated_at, e.deleted_at,
+		       EXISTS (SELECT 1 FROM evidence_analysis a WHERE a.evidence_id = e.id)
+		FROM evidence e
+		WHERE e.id = $1 AND e.owner_id = $2 AND e.deleted_at IS NULL
 	`, id, ownerID).Scan(
-		&e.ID, &e.OwnerID, &e.Title, &e.Status, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt,
+		&e.ID, &e.OwnerID, &e.Title, &e.Status, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt, &e.Analyzed,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -57,10 +58,11 @@ func (r *EvidenceRepository) GetByIDForOwner(ctx context.Context, id, ownerID uu
 
 func (r *EvidenceRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID, limit int) ([]domain.Evidence, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, owner_id, title, status, created_at, updated_at, deleted_at
-		FROM evidence
-		WHERE owner_id = $1 AND deleted_at IS NULL
-		ORDER BY created_at DESC
+		SELECT e.id, e.owner_id, e.title, e.status, e.created_at, e.updated_at, e.deleted_at,
+		       EXISTS (SELECT 1 FROM evidence_analysis a WHERE a.evidence_id = e.id)
+		FROM evidence e
+		WHERE e.owner_id = $1 AND e.deleted_at IS NULL
+		ORDER BY e.created_at DESC
 		LIMIT $2
 	`, ownerID, limit)
 	if err != nil {
@@ -71,7 +73,7 @@ func (r *EvidenceRepository) ListByOwner(ctx context.Context, ownerID uuid.UUID,
 	var out []domain.Evidence
 	for rows.Next() {
 		var e domain.Evidence
-		if err := rows.Scan(&e.ID, &e.OwnerID, &e.Title, &e.Status, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.OwnerID, &e.Title, &e.Status, &e.CreatedAt, &e.UpdatedAt, &e.DeletedAt, &e.Analyzed); err != nil {
 			return nil, fmt.Errorf("scan evidence: %w", err)
 		}
 		out = append(out, e)

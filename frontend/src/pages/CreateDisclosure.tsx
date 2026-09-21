@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { ArrowLeft, ShieldCheck, Download, Info } from 'lucide-react'
+import { ArrowLeft, ShieldCheck, Download, Info, AlertTriangle } from 'lucide-react'
 import { listEvidence } from '@/lib/evidence-api'
 import { createDisclosure, type Disclosure } from '@/lib/disclosure-api'
 import { ApiError } from '@/lib/api'
@@ -53,6 +53,12 @@ export function CreateDisclosure() {
       return next
     })
   }
+
+  const redactionRequested = removePhoneNumbers || removeEmails || removeIdNumbers
+  const unanalyzedSelected = useMemo(
+    () => (evidenceList ?? []).filter((e) => selected.has(e.id) && !e.analyzed),
+    [evidenceList, selected],
+  )
 
   if (result) {
     return (
@@ -137,7 +143,12 @@ export function CreateDisclosure() {
                     onChange={() => toggleEvidence(e.id)}
                     className="h-4 w-4 rounded border-shield-300"
                   />
-                  <span className="truncate text-shield-800">{e.title}</span>
+                  <span className="min-w-0 flex-1 truncate text-shield-800">{e.title}</span>
+                  {!e.analyzed && (
+                    <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-status-review">
+                      Not analyzed
+                    </span>
+                  )}
                   <span className="ml-auto shrink-0 text-xs text-shield-400">{e.status}</span>
                 </label>
               </li>
@@ -173,6 +184,21 @@ export function CreateDisclosure() {
             per-evidence review. Rejecting an item there keeps it visible here too.
           </p>
         </div>
+
+        {redactionRequested && unanalyzedSelected.length > 0 && (
+          <div className="mb-4 flex items-start gap-2 rounded-md border border-status-review/30 bg-amber-50 px-3 py-2.5 text-xs text-shield-700">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-status-review" strokeWidth={1.75} />
+            <p>
+              <strong>
+                {unanalyzedSelected.length === 1 ? 'This item hasn’t' : `${unanalyzedSelected.length} items haven’t`}{' '}
+                been analyzed yet
+              </strong>{' '}
+              ({unanalyzedSelected.map((e) => e.title).join(', ')}). Phone numbers, emails, and ID
+              numbers can't be found and redacted until an item is analyzed — it will be included
+              as-is unless you analyze it first, then create a new package.
+            </p>
+          </div>
+        )}
 
         {createMutation.isError && (
           <p className="mb-4 text-sm text-status-rejected">

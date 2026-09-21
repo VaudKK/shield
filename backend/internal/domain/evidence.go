@@ -24,6 +24,10 @@ type Evidence struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time
+	// Analyzed is true once OCR/AI analysis has produced a result for this
+	// evidence — the same condition disclosure package creation relies on
+	// before it can redact anything text-based.
+	Analyzed bool
 }
 
 type EvidenceFileKind string

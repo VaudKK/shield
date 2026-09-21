@@ -323,6 +323,14 @@ matching an enabled toggle (`remove_phone_numbers`, `remove_emails`,
 shared via `redaction.RedactImageForValues` / `RedactTextForValues`
 (`internal/redaction/export.go`), not duplicated.
 
+These toggles only have something to act on once evidence has been
+analyzed — that's what populates `pii_detections` in the first place.
+Selecting unanalyzed evidence with a removal toggle on doesn't silently
+include it unredacted: the package's per-item redaction notes say so
+explicitly (*"This evidence hasn't been analyzed yet..."*), and the
+evidence-selection UI shows a "Not analyzed" badge plus a warning before
+you submit.
+
 `remove_metadata` forces every included image through the same re-encode
 pipeline (stripping EXIF/metadata as a side effect of always re-encoding to
 PNG) even when no PII redaction is otherwise needed for that image.
@@ -735,6 +743,30 @@ check, doc updates, and a commit before moving on.
       visually confirmed the face — and only the face — was blacked out.
       Also covered by an integration test that decodes both the original
       and packaged image and asserts the pixels actually changed.
+      **Follow-up — silent no-op on unanalyzed evidence:** package creation
+      read whatever was already in `pii_detections` and treated an empty
+      result as "nothing to redact," without distinguishing that from
+      "this evidence was never analyzed, so nothing was ever checked." A
+      user could select a PDF, turn on every removal toggle, and get back
+      the completely unredacted original with no warning anywhere. Fixed
+      by tracking whether `evidence_analysis` has a row for that evidence
+      independently of the PII list (`buildEvidenceEntry` in
+      `internal/disclosure/service.go`) and adding an explicit redaction
+      note — *"This evidence hasn't been analyzed yet..."* — instead of
+      staying quiet. The evidence list API now also reports `analyzed`
+      per item (`EXISTS (SELECT 1 FROM evidence_analysis ...)` in
+      `EvidenceRepository`), and `CreateDisclosure.tsx` shows a "Not
+      analyzed" badge on affected items plus a warning banner before
+      submission whenever a redaction toggle is on and an unanalyzed item
+      is selected. Verified live: reproduced the original silent failure
+      (uploaded a PDF, skipped Analyze, created a package — got the raw
+      original PDF back with every toggle on and no warning), then
+      confirmed the fix live (warning banner appears once selected; after
+      analyzing, the same evidence redacts normally into a package). Also
+      covered by an integration test that creates a package before and
+      after analysis and asserts the note, the raw-vs-redacted bytes, and
+      that the specific PII values are actually gone from the redacted
+      run.
 - [x] **Phase 8 — Polish:** UI/UX and error-handling pass over the frontend
       shell rather than any one feature. Added a top-level React error
       boundary (`components/ErrorBoundary.tsx`) so an unhandled render

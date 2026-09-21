@@ -247,11 +247,12 @@ func (s *Service) buildEvidenceEntry(ctx context.Context, index int, ev *domain.
 		UploadedAt: original.CreatedAt.Format("2006-01-02 15:04:05 UTC"),
 	}
 
-	if input.IncludeSummary {
-		if analysis, err := s.analysisRepo.GetByEvidenceID(ctx, ev.ID); err == nil && analysis.Summary != "" {
-			reportEv.Summary = analysis.Summary
-			reportEv.HasSummary = true
-		}
+	analysis, analysisErr := s.analysisRepo.GetByEvidenceID(ctx, ev.ID)
+	analyzed := analysisErr == nil
+
+	if input.IncludeSummary && analyzed && analysis.Summary != "" {
+		reportEv.Summary = analysis.Summary
+		reportEv.HasSummary = true
 	}
 
 	if !input.IncludePhotos {
@@ -277,6 +278,18 @@ func (s *Service) buildEvidenceEntry(ctx context.Context, index int, ev *domain.
 		if allowedType[p.Type] {
 			candidates = append(candidates, p)
 		}
+	}
+
+	redactionRequested := input.RemovePhoneNumbers || input.RemoveEmails || input.RemoveIDNumbers
+	if len(candidates) == 0 && redactionRequested && !analyzed {
+		// The zero PII detections here are because this evidence has never
+		// been analyzed, not because analysis found nothing — those are
+		// very different situations, and silently including the original
+		// unredacted file in either case would be a privacy footgun the
+		// user has no way to notice.
+		reportEv.RedactionNotes = append(reportEv.RedactionNotes,
+			"This evidence hasn't been analyzed yet, so phone numbers, emails, and ID numbers "+
+				"couldn't be checked for redaction — analyze it first, then create a new package.")
 	}
 
 	data, err := s.storage.GetObject(ctx, original.StorageKey)
@@ -371,9 +384,8 @@ func (s *Service) buildEvidenceEntry(ctx context.Context, index int, ev *domain.
 		return reportEv, data, includedName, nil
 	}
 
-	analysis, _ := s.analysisRepo.GetByEvidenceID(ctx, ev.ID)
 	text := ""
-	if analysis != nil {
+	if analyzed {
 		text = analysis.OCRText
 	}
 	values := make([]string, len(candidates))

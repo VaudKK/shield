@@ -17,6 +17,7 @@ export interface Evidence {
   id: string
   title: string
   status: EvidenceStatus
+  analyzed: boolean
   created_at: string
   updated_at: string
   files?: EvidenceFile[]

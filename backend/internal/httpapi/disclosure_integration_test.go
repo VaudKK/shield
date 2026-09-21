@@ -244,6 +244,179 @@ func TestDisclosureFlow_CreateAndDownload(t *testing.T) {
 	}
 }
 
+// TestDisclosureFlow_UnanalyzedEvidenceGetsAnHonestNote reproduces the bug
+// report: creating a package for evidence that was never analyzed used to
+// silently embed the original, unredacted file even with every removal
+// toggle on, since the PII list was empty for a reason indistinguishable
+// from "nothing was found." It should now say so explicitly instead of
+// staying quiet, and once the same evidence is analyzed, a new package
+// should redact normally.
+func TestDisclosureFlow_UnanalyzedEvidenceGetsAnHonestNote(t *testing.T) {
+	s := newEvidenceTestServer(t)
+	s.Analysis = mustAnalysisService(t, s)
+	s.Disclosure = disclosure.NewService(
+		repository.NewEvidenceRepository(s.Pool),
+		repository.NewEvidenceFileRepository(s.Pool),
+		repository.NewAnalysisRepository(s.Pool),
+		repository.NewTimelineRepository(s.Pool),
+		repository.NewPIIRepository(s.Pool),
+		repository.NewAuditRepository(s.Pool),
+		repository.NewDisclosureRepository(s.Pool),
+		mustEvidenceStorage(t),
+		nil, // no word-box OCR needed: this test only uploads a PDF
+	)
+
+	router := s.Router()
+	email := fmt.Sprintf("unanalyzed-%d@example.com", time.Now().UnixNano())
+
+	regBody := fmt.Sprintf(`{"email":%q,"password":"correct-horse-battery","display_name":"Unanalyzed Tester"}`, email)
+	regReq := httptest.NewRequest("POST", "/api/v1/auth/register", strings.NewReader(regBody))
+	regReq.Header.Set("Content-Type", "application/json")
+	regRec := httptest.NewRecorder()
+	router.ServeHTTP(regRec, regReq)
+	if regRec.Code != http.StatusCreated {
+		t.Fatalf("register: expected 201, got %d: %s", regRec.Code, regRec.Body.String())
+	}
+	sessionCookie, csrfCookie := extractAuthCookies(t, regRec)
+
+	pdfText := "Contact Jane at jane@example.com or 555-867-5309."
+	pdfBytes := buildMinimalPDF(pdfText)
+	body, contentType := multipartUpload(t, "note.pdf", pdfBytes, "Unanalyzed Evidence")
+	uploadReq := httptest.NewRequest("POST", "/api/v1/evidence/", body)
+	uploadReq.Header.Set("Content-Type", contentType)
+	uploadReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	uploadReq.AddCookie(sessionCookie)
+	uploadReq.AddCookie(csrfCookie)
+	uploadRec := httptest.NewRecorder()
+	router.ServeHTTP(uploadRec, uploadReq)
+	if uploadRec.Code != http.StatusCreated {
+		t.Fatalf("upload: expected 201, got %d: %s", uploadRec.Code, uploadRec.Body.String())
+	}
+	var uploaded struct {
+		ID       string `json:"id"`
+		Analyzed bool   `json:"analyzed"`
+	}
+	if err := json.Unmarshal(uploadRec.Body.Bytes(), &uploaded); err != nil {
+		t.Fatalf("decode upload response: %v", err)
+	}
+	if uploaded.Analyzed {
+		t.Fatal("freshly uploaded evidence should not be marked analyzed")
+	}
+
+	createBody := fmt.Sprintf(`{
+		"title": "Unanalyzed Test",
+		"evidence_ids": [%q],
+		"include_photos": true,
+		"remove_phone_numbers": true,
+		"remove_emails": true
+	}`, uploaded.ID)
+	createReq := httptest.NewRequest("POST", "/api/v1/disclosures/", strings.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	createReq.AddCookie(sessionCookie)
+	createReq.AddCookie(csrfCookie)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create disclosure: expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	reportHTML, evidenceBytes := downloadAndReadPackage(t, created.URL)
+	// html/template escapes the apostrophe in "hasn't" to &#39; — match on
+	// a run of the note without one.
+	if !strings.Contains(reportHTML, "been analyzed yet") {
+		t.Error("expected an explicit note that this evidence was never analyzed")
+	}
+	if !bytes.Equal(evidenceBytes, pdfBytes) {
+		t.Error("expected the original, unredacted PDF to be embedded as-is (nothing to redact was ever checked)")
+	}
+
+	// Now analyze it, and confirm a new package redacts normally.
+	analyzeReq := httptest.NewRequest("POST", "/api/v1/evidence/"+uploaded.ID+"/analyze", nil)
+	analyzeReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	analyzeReq.AddCookie(sessionCookie)
+	analyzeReq.AddCookie(csrfCookie)
+	analyzeRec := httptest.NewRecorder()
+	router.ServeHTTP(analyzeRec, analyzeReq)
+	if analyzeRec.Code != http.StatusOK {
+		t.Fatalf("analyze: expected 200, got %d: %s", analyzeRec.Code, analyzeRec.Body.String())
+	}
+
+	createRec2 := httptest.NewRecorder()
+	createReq2 := httptest.NewRequest("POST", "/api/v1/disclosures/", strings.NewReader(createBody))
+	createReq2.Header.Set("Content-Type", "application/json")
+	createReq2.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	createReq2.AddCookie(sessionCookie)
+	createReq2.AddCookie(csrfCookie)
+	router.ServeHTTP(createRec2, createReq2)
+	if createRec2.Code != http.StatusCreated {
+		t.Fatalf("create second disclosure: expected 201, got %d: %s", createRec2.Code, createRec2.Body.String())
+	}
+	var created2 struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(createRec2.Body.Bytes(), &created2); err != nil {
+		t.Fatalf("decode second create response: %v", err)
+	}
+
+	reportHTML2, evidenceBytes2 := downloadAndReadPackage(t, created2.URL)
+	if strings.Contains(reportHTML2, "been analyzed yet") {
+		t.Error("did not expect the not-analyzed note once evidence has been analyzed")
+	}
+	if bytes.Equal(evidenceBytes2, pdfBytes) {
+		t.Error("expected a redacted transcript once analyzed, not the raw original PDF")
+	}
+	if strings.Contains(string(evidenceBytes2), "555-867-5309") || strings.Contains(string(evidenceBytes2), "jane@example.com") {
+		t.Error("expected the phone number and email to be redacted out of the transcript")
+	}
+}
+
+// downloadAndReadPackage fetches a disclosure package ZIP and returns
+// report.html's contents plus the bytes of the single file under evidence/.
+func downloadAndReadPackage(t *testing.T, url string) (reportHTML string, evidenceBytes []byte) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("download package: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 downloading package, got %d", resp.StatusCode)
+	}
+	zipBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read package body: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	if err != nil {
+		t.Fatalf("open package as zip: %v", err)
+	}
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %s: %v", f.Name, err)
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read zip entry %s: %v", f.Name, err)
+		}
+		if f.Name == "report.html" {
+			reportHTML = string(data)
+		}
+		if strings.HasPrefix(f.Name, "evidence/") {
+			evidenceBytes = data
+		}
+	}
+	return reportHTML, evidenceBytes
+}
+
 // TestDisclosureFlow_BlurFacesInImage exercises the real face-blur path
 // end to end: a known photo with a detectable face goes into a package
 // with blur_faces on, and the returned image is checked for both the

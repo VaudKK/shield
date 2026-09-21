@@ -26,6 +26,7 @@ type evidenceResponse struct {
 	ID          string                 `json:"id"`
 	Title       string                 `json:"title"`
 	Status      string                 `json:"status"`
+	Analyzed    bool                   `json:"analyzed"`
 	CreatedAt   string                 `json:"created_at"`
 	UpdatedAt   string                 `json:"updated_at"`
 	Files       []evidenceFileResponse `json:"files,omitempty"`
@@ -37,6 +38,7 @@ func toEvidenceResponse(e *domain.Evidence) evidenceResponse {
 		ID:        e.ID.String(),
 		Title:     e.Title,
 		Status:    string(e.Status),
+		Analyzed:  e.Analyzed,
 		CreatedAt: e.CreatedAt.Format(timeFormat),
 		UpdatedAt: e.UpdatedAt.Format(timeFormat),
 	}
