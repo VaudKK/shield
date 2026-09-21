@@ -52,6 +52,7 @@ func mustAnalysisService(t *testing.T, s *httpapi.Server) *analysis.Service {
 		mustEvidenceStorage(t),
 		ocr.NewCompositeService(ocr.NewPDFTextService()),
 		aiService,
+		false,
 	)
 }
 

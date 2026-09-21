@@ -40,6 +40,13 @@ type AnalysisInput struct {
 	Filename      string
 	UploadedAt    time.Time
 	ExtractedText string
+
+	// ImageBytes and ImageMimeType, when set, send the image itself to
+	// the model alongside (or instead of) ExtractedText. Callers should
+	// only set this when OCR produced little or no usable text — it is a
+	// deliberate, narrow fallback, not a default path for every image.
+	ImageBytes    []byte
+	ImageMimeType string
 }
 
 type Service interface {

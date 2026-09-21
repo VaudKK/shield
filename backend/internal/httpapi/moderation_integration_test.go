@@ -184,6 +184,7 @@ func TestAnalyzeEvidence_RefusesQuarantinedEvidence(t *testing.T) {
 		nil, // storage.Storage; unreached, the quarantined guard returns first
 		nil, // ocr.Service; unreached
 		nil, // ai.Service; unreached
+		false,
 	)
 	router := s.Router()
 

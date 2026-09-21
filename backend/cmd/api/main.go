@@ -125,6 +125,9 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Warn("OPENAI_API_KEY not set; evidence analysis will run OCR and PII detection only")
 	}
+	if cfg.AIVisionEnabled {
+		logger.Info("AI_VISION_ENABLED=true; images with weak/no OCR text will be sent to OpenAI directly")
+	}
 
 	analysisService := analysis.NewService(
 		repository.NewEvidenceRepository(pool),
@@ -136,6 +139,7 @@ func run(logger *slog.Logger) error {
 		objectStorage,
 		ocrService,
 		aiService,
+		cfg.AIVisionEnabled,
 	)
 
 	redactionService := redaction.NewService(

@@ -19,15 +19,16 @@ import (
 )
 
 type Service struct {
-	evidence *repository.EvidenceRepository
-	files    *repository.EvidenceFileRepository
-	audit    *repository.AuditRepository
-	analysis *repository.AnalysisRepository
-	timeline *repository.TimelineRepository
-	piiRepo  *repository.PIIRepository
-	storage  storage.Storage
-	ocr      ocr.Service
-	ai       ai.Service // nil disables AI analysis (OCR + regex PII still run)
+	evidence      *repository.EvidenceRepository
+	files         *repository.EvidenceFileRepository
+	audit         *repository.AuditRepository
+	analysis      *repository.AnalysisRepository
+	timeline      *repository.TimelineRepository
+	piiRepo       *repository.PIIRepository
+	storage       storage.Storage
+	ocr           ocr.Service
+	ai            ai.Service // nil disables AI analysis (OCR + regex PII still run)
+	visionEnabled bool       // opt-in: also send the image itself to ai for image evidence
 }
 
 func NewService(
@@ -40,17 +41,19 @@ func NewService(
 	store storage.Storage,
 	ocrService ocr.Service,
 	aiService ai.Service,
+	visionEnabled bool,
 ) *Service {
 	return &Service{
-		evidence: evidenceRepo,
-		files:    filesRepo,
-		audit:    auditRepo,
-		analysis: analysisRepo,
-		timeline: timelineRepo,
-		piiRepo:  piiRepo,
-		storage:  store,
-		ocr:      ocrService,
-		ai:       aiService,
+		evidence:      evidenceRepo,
+		files:         filesRepo,
+		audit:         auditRepo,
+		analysis:      analysisRepo,
+		timeline:      timelineRepo,
+		piiRepo:       piiRepo,
+		storage:       store,
+		ocr:           ocrService,
+		ai:            aiService,
+		visionEnabled: visionEnabled,
 	}
 }
 
@@ -112,12 +115,28 @@ func (s *Service) Analyze(ctx context.Context, evidenceID, ownerID uuid.UUID) (*
 	var aiResult *ai.AnalysisResult
 	var aiErr error
 	if s.ai != nil {
-		aiResult, aiErr = s.ai.Analyze(ctx, ai.AnalysisInput{
+		aiInput := ai.AnalysisInput{
 			Filename:      original.OriginalFilename,
 			UploadedAt:    original.CreatedAt,
 			ExtractedText: ocrResult.Text,
-		})
-		auditMeta := map[string]any{}
+		}
+
+		// Vision fallback: only when explicitly enabled, and only for
+		// image evidence — never for PDFs, and never just because a key is
+		// configured. Sent alongside the OCR text (not instead of it) and
+		// not gated on OCR text length: a busy scene can produce plenty of
+		// *garbled* text that's just as useless as no text at all, so
+		// "text is short" isn't a reliable proxy for "text is bad" — the
+		// model gets both signals and can judge for itself.
+		visionUsed := false
+		if s.visionEnabled && strings.HasPrefix(original.MimeType, "image/") {
+			aiInput.ImageBytes = data
+			aiInput.ImageMimeType = original.MimeType
+			visionUsed = true
+		}
+
+		aiResult, aiErr = s.ai.Analyze(ctx, aiInput)
+		auditMeta := map[string]any{"vision_used": visionUsed}
 		if aiErr != nil {
 			auditMeta["error"] = aiErr.Error()
 		} else {

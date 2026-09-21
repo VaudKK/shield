@@ -21,6 +21,12 @@ type Config struct {
 	OpenAIAPIKey string
 	// OpenAIModel overrides the default model used for evidence analysis.
 	OpenAIModel string
+	// AIVisionEnabled explicitly opts in to sending an image's actual
+	// pixels to OpenAI when OCR produced little or no usable text. Off by
+	// default: unlike a model/key change, this is a genuine privacy
+	// boundary change (image bytes leaving the system for a third party),
+	// not just an analysis-quality tweak.
+	AIVisionEnabled bool
 
 	// NudeNetServiceURL points at the self-hosted content-safety service.
 	// Empty disables content-safety classification: uploads stay
@@ -49,6 +55,7 @@ func Load() (*Config, error) {
 		S3SecretKey:         os.Getenv("S3_SECRET_ACCESS_KEY"),
 		OpenAIAPIKey:        os.Getenv("OPENAI_API_KEY"),
 		OpenAIModel:         os.Getenv("OPENAI_MODEL"),
+		AIVisionEnabled:     os.Getenv("AI_VISION_ENABLED") == "true",
 		NudeNetServiceURL:   os.Getenv("NUDENET_SERVICE_URL"),
 		PDFRedactServiceURL: os.Getenv("PDF_REDACT_SERVICE_URL"),
 		SessionSecret:       os.Getenv("SESSION_SECRET"),

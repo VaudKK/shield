@@ -460,6 +460,7 @@ Set `PDF_REDACT_SERVICE_URL=http://localhost:8001` in `backend/.env`
 | `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | S3-compatible object storage credentials (used from Phase 3) |
 | `OPENAI_API_KEY` | OpenAI API key, backend-only. Empty disables AI analysis (evidence analysis still runs OCR + regex PII detection) |
 | `OPENAI_MODEL` | Overrides the model used for analysis. Defaults to `gpt-4o-mini` |
+| `AI_VISION_ENABLED` | `true` to send image evidence directly to OpenAI alongside its OCR text. Off by default — a genuine privacy-boundary change, not a quality tweak; independent of whether `OPENAI_API_KEY` is set |
 | `NUDENET_SERVICE_URL` | Base URL of the content-safety service. Empty disables classification (uploads stay `quarantined`) |
 | `PDF_REDACT_SERVICE_URL` | Base URL of the PDF redaction service. Empty falls back to a redacted text transcript instead of an in-place redacted PDF |
 | `SESSION_SECRET` | Secret used to sign session cookies (used from Phase 2) |
@@ -620,6 +621,35 @@ frontend bundle. Optionally set `OPENAI_MODEL` to override the default
 regex-based PII detection; the summary explicitly says AI analysis isn't
 configured rather than silently producing nothing.
 
+### Vision fallback for images OCR can't read
+
+Tesseract is built for flat scanned documents, not natural photos — a
+crowd photo with a legible sign but a lot of cluttered background text is
+a realistic case where OCR returns garbled fragments instead of anything
+usable, and the AI summary (correctly) reports that the extracted text is
+incoherent rather than inventing a plausible-sounding read of noise.
+
+Setting `AI_VISION_ENABLED=true` adds a fallback for exactly that case: for
+**image** evidence, the image itself is sent to OpenAI's vision-capable
+model *alongside* whatever OCR text was extracted, using the same
+non-investigative, hedged-language system instructions as the text path
+(`internal/ai/openai.go`). It never fires for PDFs, and never fires just
+because a key is configured — this is a deliberate, separate opt-in,
+because unlike every other AI setting it changes what leaves the system:
+the image's actual pixels, not a text transcript of it.
+
+This isn't gated on OCR text length. An early version tried "send the image
+only when OCR text is under ~20 characters," reasoning that short text
+meant OCR had failed — but a real test case broke that assumption: a busy
+crowd photo produced *220 characters* of OCR output, all of it garbled
+noise from cluttered background signage, none of it usable. Text length
+doesn't distinguish "OCR found nothing" from "OCR found a lot of nothing
+useful," so the image is now attached whenever vision is enabled for image
+evidence, and the model is trusted to use whichever signal (text or image)
+actually helps. Every analysis run records whether vision was used in its
+audit event metadata (`vision_used`), so it's never ambiguous after the
+fact.
+
 ## API documentation
 
 Implemented so far:
@@ -745,11 +775,32 @@ check, doc updates, and a commit before moving on.
       an authentic OCR misread on a garbled email, then a clean extraction
       of a real email and phone number, both correctly picked up by the
       regex detector and rendered in the browser UI) and against real
-      Postgres/S3 in an automated integration test. **Note:** the OpenAI key
-      currently in `backend/.env` returns `401 Unauthorized` from the real
-      API — the AI step visibly and correctly degrades rather than failing,
-      but a valid key is needed to see actual model output; see
-      [OpenAI setup](#openai-setup).
+      Postgres/S3 in an automated integration test.
+      **Follow-up — vision fallback for OCR failures on natural photos:**
+      Tesseract is built for scanned documents, not photos of a crowded
+      scene — a real test image (a protest photo with one legible sign
+      amid a lot of cluttered background text) produced garbled OCR
+      output, and the AI summary correctly reported the extracted text as
+      incoherent rather than inventing a false read of it. Added an
+      explicit, off-by-default `AI_VISION_ENABLED` flag: when set, an
+      image is sent to OpenAI's vision-capable model alongside its OCR
+      text, under the same non-investigative system instructions as the
+      text path. Deliberately narrow (images only, never on unless
+      explicitly configured) since it changes what leaves the system —
+      the image's own pixels, not just a text transcript — which is a
+      privacy decision, not just an analysis-quality one. An early
+      length-based trigger ("only if OCR text is under ~20 characters")
+      was wrong in practice — the same protest photo produced 220
+      characters of pure garbled noise, well past that threshold, so the
+      fallback never fired even though the text was useless; fixed by
+      dropping the length gate entirely rather than trying to tune it.
+      Verified live through the real Docker stack with that exact photo:
+      before the fix, the summary reported only that the text was
+      incoherent; after, it correctly identified a protest scene and read
+      "REJECT FINANCE ACT 2024" directly off the sign. See
+      [Vision fallback for images OCR can't read](#vision-fallback-for-images-ocr-cant-read).
+      Covered by integration tests, including a regression test for the
+      long-garbled-text case specifically.
 - [x] **Phase 6 — Redaction:** review workflow (accept/reject detected PII,
       add manual entries) and a "create redacted copy" action
       (`internal/redaction`) that never modifies the original. Images get

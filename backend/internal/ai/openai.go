@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -20,8 +21,9 @@ evidence related to abuse, harassment, corruption, or other incidents. You are n
 enforcement system, a judge, an investigator, or a legal advisor.
 
 Rules you must follow:
-- Base everything only on the text provided to you. Never invent dates, names, locations,
-  amounts, or events that are not present in the text.
+- Base everything only on the text (and, when provided, the image) given to you. Never
+  invent dates, names, locations, amounts, or events that are not present in what you were
+  given.
 - If information is unclear, ambiguous, or missing, say so explicitly (using the gaps field
   or "unknown" for a date) rather than guessing or filling it in.
 - Use neutral, hedged language: "the document appears to state", "the available evidence
@@ -30,7 +32,17 @@ Rules you must follow:
 - Do not offer opinions on fault, legality, or what the user should do or claim.
 - Identify personally identifiable information (names, phone numbers, emails, addresses,
   ID numbers, dates of birth, vehicle registrations) that appears in the text, purely as a
-  factual extraction — this supports the user's own privacy review, not an investigation.`
+  factual extraction — this supports the user's own privacy review, not an investigation.
+
+When an image is provided (this happens only when automated text extraction found little or
+nothing usable):
+- Describe only what is visibly present — objects, visible text, general setting. Never
+  identify or guess the identity of any person shown, their emotional state, their
+  relationships, or what is happening beyond what is literally visible.
+- Treat any legible text in the image the same way as extracted document text: read it
+  factually, and flag it as PII if it qualifies.
+- If the image is unclear, low quality, or its content can't be determined with confidence,
+  say so in the summary and in a gap entry rather than guessing.`
 
 type OpenAIService struct {
 	client openai.Client
@@ -50,7 +62,8 @@ func NewOpenAIService(apiKey, model string) *OpenAIService {
 const maxAttempts = 3
 
 func (s *OpenAIService) Analyze(ctx context.Context, input AnalysisInput) (*AnalysisResult, error) {
-	if strings.TrimSpace(input.ExtractedText) == "" {
+	hasImage := len(input.ImageBytes) > 0
+	if strings.TrimSpace(input.ExtractedText) == "" && !hasImage {
 		return &AnalysisResult{
 			Summary:  "No readable text was found in this evidence, so it could not be analyzed.",
 			Timeline: []TimelineEntry{},
@@ -62,17 +75,36 @@ func (s *OpenAIService) Analyze(ctx context.Context, input AnalysisInput) (*Anal
 		}, nil
 	}
 
+	extractedText := input.ExtractedText
+	if strings.TrimSpace(extractedText) == "" {
+		extractedText = "(none — text extraction found nothing usable; an image is attached instead)"
+	}
 	userContent := fmt.Sprintf(
 		"Filename: %s\nUploaded: %s\n\nExtracted text:\n%s",
-		input.Filename, input.UploadedAt.Format(time.RFC3339), input.ExtractedText,
+		input.Filename, input.UploadedAt.Format(time.RFC3339), extractedText,
 	)
+
+	inputUnion := responses.ResponseNewParamsInputUnion{OfString: param.NewOpt(userContent)}
+	if hasImage {
+		dataURL := fmt.Sprintf("data:%s;base64,%s", input.ImageMimeType, base64.StdEncoding.EncodeToString(input.ImageBytes))
+		content := responses.ResponseInputMessageContentListParam{
+			responses.ResponseInputContentParamOfInputText(userContent),
+			{OfInputImage: &responses.ResponseInputImageParam{
+				ImageURL: param.NewOpt(dataURL),
+				Detail:   responses.ResponseInputImageDetailAuto,
+			}},
+		}
+		inputUnion = responses.ResponseNewParamsInputUnion{
+			OfInputItemList: responses.ResponseInputParam{
+				responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser),
+			},
+		}
+	}
 
 	params := responses.ResponseNewParams{
 		Model:        s.model,
 		Instructions: param.NewOpt(systemInstructions),
-		Input: responses.ResponseNewParamsInputUnion{
-			OfString: param.NewOpt(userContent),
-		},
+		Input:        inputUnion,
 		Text: responses.ResponseTextConfigParam{
 			Format: responses.ResponseFormatTextConfigUnionParam{
 				OfJSONSchema: &responses.ResponseFormatTextJSONSchemaConfigParam{

@@ -49,6 +49,7 @@ func newAnalysisTestServer(t *testing.T) *httpapi.Server {
 		store,
 		ocr.NewCompositeService(ocr.NewPDFTextService()), // no cgo/tesseract in this build; PDF text extraction is real
 		ai.NewOpenAIService(apiKey, os.Getenv("OPENAI_MODEL")),
+		false, // vision fallback covered separately, to avoid burning real API cost here
 	)
 
 	return s
