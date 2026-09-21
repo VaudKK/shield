@@ -21,6 +21,7 @@ import (
 	"github.com/VaudKK/shield/backend/internal/evidence"
 	"github.com/VaudKK/shield/backend/internal/httpapi"
 	"github.com/VaudKK/shield/backend/internal/ocr"
+	"github.com/VaudKK/shield/backend/internal/pdfredact"
 	"github.com/VaudKK/shield/backend/internal/ratelimit"
 	"github.com/VaudKK/shield/backend/internal/redaction"
 	"github.com/VaudKK/shield/backend/internal/repository"
@@ -111,6 +112,13 @@ func run(logger *slog.Logger) error {
 		ocr.NewPDFTextService(),
 	)
 
+	var pdfRedactor pdfredact.Service
+	if cfg.PDFRedactServiceURL != "" {
+		pdfRedactor = pdfredact.NewClient(cfg.PDFRedactServiceURL)
+	} else {
+		logger.Warn("PDF_REDACT_SERVICE_URL not set; PDF redaction will fall back to a redacted text transcript")
+	}
+
 	var aiService ai.Service
 	if cfg.OpenAIAPIKey != "" {
 		aiService = ai.NewOpenAIService(cfg.OpenAIAPIKey, cfg.OpenAIModel)
@@ -139,6 +147,7 @@ func run(logger *slog.Logger) error {
 		repository.NewAnalysisRepository(pool),
 		objectStorage,
 		ocrService,
+		pdfRedactor,
 	)
 
 	disclosureService := disclosure.NewService(
@@ -151,6 +160,7 @@ func run(logger *slog.Logger) error {
 		repository.NewDisclosureRepository(pool),
 		objectStorage,
 		ocrService,
+		pdfRedactor,
 	)
 
 	server := &httpapi.Server{

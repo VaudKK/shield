@@ -27,6 +27,11 @@ type Config struct {
 	// "quarantined" rather than being claimed safe with nothing checked.
 	NudeNetServiceURL string
 
+	// PDFRedactServiceURL points at the self-hosted in-place PDF redaction
+	// service. Empty disables it: PDF redaction falls back to a redacted
+	// text transcript rather than failing outright.
+	PDFRedactServiceURL string
+
 	CORSAllowedOrigins []string
 
 	SessionSecret string
@@ -34,19 +39,20 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Env:                getEnv("APP_ENV", "development"),
-		Port:               getEnv("PORT", "8080"),
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		S3Endpoint:         os.Getenv("S3_ENDPOINT"),
-		S3Region:           getEnv("S3_REGION", "auto"),
-		S3Bucket:           os.Getenv("S3_BUCKET"),
-		S3AccessKey:        os.Getenv("S3_ACCESS_KEY_ID"),
-		S3SecretKey:        os.Getenv("S3_SECRET_ACCESS_KEY"),
-		OpenAIAPIKey:       os.Getenv("OPENAI_API_KEY"),
-		OpenAIModel:        os.Getenv("OPENAI_MODEL"),
-		NudeNetServiceURL:  os.Getenv("NUDENET_SERVICE_URL"),
-		SessionSecret:      os.Getenv("SESSION_SECRET"),
-		CORSAllowedOrigins: splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
+		Env:                 getEnv("APP_ENV", "development"),
+		Port:                getEnv("PORT", "8080"),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		S3Endpoint:          os.Getenv("S3_ENDPOINT"),
+		S3Region:            getEnv("S3_REGION", "auto"),
+		S3Bucket:            os.Getenv("S3_BUCKET"),
+		S3AccessKey:         os.Getenv("S3_ACCESS_KEY_ID"),
+		S3SecretKey:         os.Getenv("S3_SECRET_ACCESS_KEY"),
+		OpenAIAPIKey:        os.Getenv("OPENAI_API_KEY"),
+		OpenAIModel:         os.Getenv("OPENAI_MODEL"),
+		NudeNetServiceURL:   os.Getenv("NUDENET_SERVICE_URL"),
+		PDFRedactServiceURL: os.Getenv("PDF_REDACT_SERVICE_URL"),
+		SessionSecret:       os.Getenv("SESSION_SECRET"),
+		CORSAllowedOrigins:  splitCSV(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
 	}
 
 	if cfg.DatabaseURL == "" {

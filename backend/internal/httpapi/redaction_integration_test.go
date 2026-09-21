@@ -67,6 +67,7 @@ func TestRedactionFlow_PDFTranscript(t *testing.T) {
 		repository.NewAnalysisRepository(s.Pool),
 		mustEvidenceStorage(t),
 		ocr.NewCompositeService(ocr.NewPDFTextService()),
+		nil, // no PDF redaction service configured: exercises the text-transcript fallback
 	)
 	s.Analysis = mustAnalysisService(t, s)
 

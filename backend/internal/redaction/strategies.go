@@ -41,11 +41,45 @@ func (s *Service) redactImageFile(
 	return redacted, "image/png", ".png", nil
 }
 
-// redactTextTranscript is the fallback for non-image evidence (PDFs): it
-// produces a redacted plain-text copy of the OCR'd content, not a visually
-// redacted document. True PDF content redaction — covering the actual
-// rendered text in place — needs a PDF-editing library beyond this MVP's
-// scope; this is documented in the README as a known limitation.
+// redactPDFFile redacts a PDF in place via the configured pdfredact.Service
+// (real content-stream removal, not an overlay) when one is available,
+// falling back to a redacted plain-text transcript when it isn't configured
+// or the call fails — the same graceful-degradation pattern the rest of
+// this app uses for its other optional external services (content safety,
+// AI analysis). The returned method string records which path was actually
+// taken, for the audit trail.
+func (s *Service) redactPDFFile(
+	ctx context.Context,
+	evidenceID uuid.UUID,
+	data []byte,
+	accepted []domain.PIIDetection,
+	applied map[uuid.UUID]bool,
+) (redacted []byte, mime, ext, method string, err error) {
+	if s.pdfRedactor != nil {
+		values := make([]string, len(accepted))
+		for i, item := range accepted {
+			values[i] = item.Value
+		}
+		result, redactErr := s.pdfRedactor.Redact(ctx, data, values)
+		if redactErr == nil {
+			for _, item := range accepted {
+				applied[item.ID] = result.Applied[item.Value]
+			}
+			return result.PDF, "application/pdf", ".pdf", "pdf_inplace", nil
+		}
+		// Fall through to the text-transcript fallback rather than failing
+		// the whole redaction — the evidence is still safely stored, and a
+		// weaker-but-real redaction beats none.
+	}
+
+	redacted, mime, ext, err = s.redactTextTranscript(ctx, evidenceID, accepted, applied)
+	return redacted, mime, ext, "pdf_text_transcript_fallback", err
+}
+
+// redactTextTranscript is the fallback for non-image evidence (PDFs) when
+// no PDF redaction service is configured or reachable: it produces a
+// redacted plain-text copy of the OCR'd content, not a visually redacted
+// document.
 func (s *Service) redactTextTranscript(
 	ctx context.Context,
 	evidenceID uuid.UUID,

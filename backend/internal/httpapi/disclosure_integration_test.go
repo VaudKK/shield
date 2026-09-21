@@ -34,6 +34,7 @@ func TestDisclosureFlow_CreateAndDownload(t *testing.T) {
 		repository.NewDisclosureRepository(s.Pool),
 		mustEvidenceStorage(t),
 		nil, // no word-box OCR needed: this test only uploads a PDF
+		nil, // no PDF redaction service configured: exercises the text-transcript fallback
 	)
 
 	router := s.Router()
@@ -264,6 +265,7 @@ func TestDisclosureFlow_UnanalyzedEvidenceGetsAnHonestNote(t *testing.T) {
 		repository.NewDisclosureRepository(s.Pool),
 		mustEvidenceStorage(t),
 		nil, // no word-box OCR needed: this test only uploads a PDF
+		nil, // no PDF redaction service configured: exercises the text-transcript fallback
 	)
 
 	router := s.Router()
@@ -439,6 +441,7 @@ func TestDisclosureFlow_BlurFacesInImage(t *testing.T) {
 		repository.NewDisclosureRepository(s.Pool),
 		mustEvidenceStorage(t),
 		nil, // no PII candidates in this test, so word-box OCR is never called
+		nil, // no PDF redaction service needed: this test only uploads an image
 	)
 
 	router := s.Router()

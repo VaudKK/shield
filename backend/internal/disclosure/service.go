@@ -14,6 +14,7 @@ import (
 	"github.com/VaudKK/shield/backend/internal/domain"
 	"github.com/VaudKK/shield/backend/internal/faceblur"
 	"github.com/VaudKK/shield/backend/internal/ocr"
+	"github.com/VaudKK/shield/backend/internal/pdfredact"
 	"github.com/VaudKK/shield/backend/internal/redaction"
 	"github.com/VaudKK/shield/backend/internal/repository"
 	"github.com/VaudKK/shield/backend/internal/storage"
@@ -38,6 +39,7 @@ type Service struct {
 	disclosures  *repository.DisclosureRepository
 	storage      storage.Storage
 	ocr          wordBoxer
+	pdfRedactor  pdfredact.Service // nil falls back to a redacted text transcript
 }
 
 func NewService(
@@ -50,6 +52,7 @@ func NewService(
 	disclosureRepo *repository.DisclosureRepository,
 	store storage.Storage,
 	ocrService wordBoxer,
+	pdfRedactor pdfredact.Service,
 ) *Service {
 	return &Service{
 		evidence:     evidenceRepo,
@@ -61,6 +64,7 @@ func NewService(
 		disclosures:  disclosureRepo,
 		storage:      store,
 		ocr:          ocrService,
+		pdfRedactor:  pdfRedactor,
 	}
 }
 
@@ -376,21 +380,40 @@ func (s *Service) buildEvidenceEntry(ctx context.Context, index int, ev *domain.
 		return reportEv, working, includedName, nil
 	}
 
-	// Non-image (PDF): embed the original unless a redaction is needed, in
-	// which case fall back to a redacted text transcript — the same
-	// documented limitation as the per-evidence redaction flow.
+	// Non-image (PDF): embed the original unless a redaction is needed.
 	if len(candidates) == 0 {
 		reportEv.IncludedAs = includedName
 		return reportEv, data, includedName, nil
 	}
 
-	text := ""
-	if analyzed {
-		text = analysis.OCRText
-	}
 	values := make([]string, len(candidates))
 	for i, c := range candidates {
 		values[i] = c.Value
+	}
+
+	if s.pdfRedactor != nil {
+		result, err := s.pdfRedactor.Redact(ctx, data, values)
+		if err == nil {
+			for _, c := range candidates {
+				if result.Applied[c.Value] {
+					reportEv.RedactionNotes = append(reportEv.RedactionNotes, fmt.Sprintf("%s: redacted in place", c.Type))
+				} else {
+					reportEv.RedactionNotes = append(reportEv.RedactionNotes, fmt.Sprintf("%s: could not be located in the PDF, not redacted", c.Type))
+				}
+			}
+			includedName = strings.TrimSuffix(includedName, filepathExt(includedName)) + "-redacted.pdf"
+			reportEv.IncludedAs = includedName
+			return reportEv, result.PDF, includedName, nil
+		}
+		reportEv.RedactionNotes = append(reportEv.RedactionNotes,
+			fmt.Sprintf("The PDF redaction service could not process this file (%v); fell back to a redacted text transcript.", err))
+	}
+
+	// Fallback: no PDF redaction service configured, or it failed. A
+	// weaker-but-real redaction beats silently including the original.
+	text := ""
+	if analyzed {
+		text = analysis.OCRText
 	}
 	redactedText, applied := redaction.RedactTextForValues(text, values)
 	for _, c := range candidates {
@@ -401,7 +424,7 @@ func (s *Service) buildEvidenceEntry(ctx context.Context, index int, ev *domain.
 		}
 	}
 	reportEv.RedactionNotes = append(reportEv.RedactionNotes,
-		"This PDF required redaction, so a redacted plain-text transcript was included instead of the original PDF — true in-place PDF redaction isn't supported in this version.")
+		"This PDF required redaction, so a redacted plain-text transcript was included instead of the original PDF.")
 
 	includedName = strings.TrimSuffix(includedName, filepathExt(includedName)) + "-redacted.txt"
 	reportEv.IncludedAs = includedName

@@ -14,6 +14,7 @@ import (
 
 	"github.com/VaudKK/shield/backend/internal/domain"
 	"github.com/VaudKK/shield/backend/internal/ocr"
+	"github.com/VaudKK/shield/backend/internal/pdfredact"
 	"github.com/VaudKK/shield/backend/internal/repository"
 	"github.com/VaudKK/shield/backend/internal/storage"
 	"github.com/google/uuid"
@@ -39,6 +40,7 @@ type Service struct {
 	analysisRepo  *repository.AnalysisRepository
 	storage       storage.Storage
 	ocr           wordBoxer
+	pdfRedactor   pdfredact.Service // nil falls back to a redacted text transcript
 }
 
 func NewService(
@@ -50,6 +52,7 @@ func NewService(
 	analysisRepo *repository.AnalysisRepository,
 	store storage.Storage,
 	ocrService wordBoxer,
+	pdfRedactor pdfredact.Service,
 ) *Service {
 	return &Service{
 		evidence:      evidenceRepo,
@@ -60,6 +63,7 @@ func NewService(
 		analysisRepo:  analysisRepo,
 		storage:       store,
 		ocr:           ocrService,
+		pdfRedactor:   pdfRedactor,
 	}
 }
 
@@ -140,7 +144,7 @@ func (s *Service) Redact(ctx context.Context, evidenceID, ownerID uuid.UUID) (*R
 	isImage := strings.HasPrefix(original.MimeType, "image/")
 
 	var redactedBytes []byte
-	var redactedMime, redactedExt string
+	var redactedMime, redactedExt, method string
 	applied := make(map[uuid.UUID]bool, len(accepted))
 
 	if isImage {
@@ -148,8 +152,9 @@ func (s *Service) Redact(ctx context.Context, evidenceID, ownerID uuid.UUID) (*R
 		if err != nil {
 			return nil, err
 		}
+		method = "image_pixel"
 	} else {
-		redactedBytes, redactedMime, redactedExt, err = s.redactTextTranscript(ctx, ev.ID, accepted, applied)
+		redactedBytes, redactedMime, redactedExt, method, err = s.redactPDFFile(ctx, ev.ID, data, accepted, applied)
 		if err != nil {
 			return nil, err
 		}
@@ -205,6 +210,7 @@ func (s *Service) Redact(ctx context.Context, evidenceID, ownerID uuid.UUID) (*R
 		"redacted_file_id": ef.ID.String(),
 		"requested_count":  len(accepted),
 		"applied_count":    appliedCount,
+		"method":           method,
 	})
 
 	return &RedactResult{File: ef, FileURL: fileURL, Redactions: redactions}, nil

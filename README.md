@@ -318,10 +318,11 @@ never bulk-redacted into a disclosure package, even with the matching
 toggle on — a reject is treated as a deliberate choice to keep that item
 visible, and a package-level toggle doesn't override it. Everything else
 matching an enabled toggle (`remove_phone_numbers`, `remove_emails`,
-`remove_id_numbers`) is redacted using the exact same real pixel-redaction
-(images) or text-transcript (PDFs) primitives as Phase 6 — the logic is
-shared via `redaction.RedactImageForValues` / `RedactTextForValues`
-(`internal/redaction/export.go`), not duplicated.
+`remove_id_numbers`) is redacted using the exact same primitives as
+Phase 6 — real pixel redaction for images (`redaction.RedactImageForValues`)
+or real in-place PDF redaction via `internal/pdfredact` when that service
+is configured, falling back to `RedactTextForValues`'s text transcript
+otherwise (`internal/redaction/export.go`) — not duplicated logic.
 
 These toggles only have something to act on once evidence has been
 analyzed — that's what populates `pii_detections` in the first place.
@@ -358,8 +359,10 @@ than rebuilding it.
 - Node.js 20+
 - Go 1.24+ (the module targets a newer point release; `go build`/`go test`
   fetch that toolchain automatically on first use via `GOTOOLCHAIN=auto`)
-- Python 3.12+ (only if running the content-safety service outside Docker)
-- Docker (for PostgreSQL and NudeNet, and optionally the full stack)
+- Python 3.12+ (only if running the content-safety or PDF redaction
+  services outside Docker)
+- Docker (for PostgreSQL, NudeNet, and PDF redaction, and optionally the
+  full stack)
 - An OpenAI API key (optional — evidence analysis falls back to OCR + regex
   PII detection without one; see [OpenAI setup](#openai-setup))
 
@@ -372,10 +375,11 @@ docker compose up --build
 This starts PostgreSQL (on host port `5433`, to avoid clashing with a
 locally installed Postgres on the default `5432` — the backend container
 always talks to it internally at `postgres:5432`), the NudeNet content-safety
-service at `http://localhost:8000`, and the Go API, which applies migrations
-on boot, at `http://localhost:8080`. `docker compose up --build` also waits
-for NudeNet to report healthy before starting the backend. Then run the
-frontend separately:
+service at `http://localhost:8000`, the PDF redaction service at
+`http://localhost:8001`, and the Go API, which applies migrations on boot,
+at `http://localhost:8080`. `docker compose up --build` also waits for
+NudeNet and the PDF redaction service to report healthy before starting the
+backend. Then run the frontend separately:
 
 ```bash
 cd frontend
@@ -431,6 +435,18 @@ python -m venv .venv
 Set `NUDENET_SERVICE_URL=http://localhost:8000` in `backend/.env` (already
 the default in `backend/.env.example`).
 
+### Running the PDF redaction service without Docker
+
+```bash
+cd pdf-redact-service
+python -m venv .venv
+.venv/Scripts/pip install -r requirements-dev.txt   # .venv/bin/pip on macOS/Linux
+.venv/Scripts/uvicorn app:app --reload --port 8001
+```
+
+Set `PDF_REDACT_SERVICE_URL=http://localhost:8001` in `backend/.env`
+(already the default in `backend/.env.example`).
+
 ## Environment variables
 
 ### Backend (`backend/.env`, see `backend/.env.example`)
@@ -445,6 +461,7 @@ the default in `backend/.env.example`).
 | `OPENAI_API_KEY` | OpenAI API key, backend-only. Empty disables AI analysis (evidence analysis still runs OCR + regex PII detection) |
 | `OPENAI_MODEL` | Overrides the model used for analysis. Defaults to `gpt-4o-mini` |
 | `NUDENET_SERVICE_URL` | Base URL of the content-safety service. Empty disables classification (uploads stay `quarantined`) |
+| `PDF_REDACT_SERVICE_URL` | Base URL of the PDF redaction service. Empty falls back to a redacted text transcript instead of an in-place redacted PDF |
 | `SESSION_SECRET` | Secret used to sign session cookies (used from Phase 2) |
 
 ### Frontend (`frontend/.env`, see `frontend/.env.example`)
@@ -509,6 +526,16 @@ cd nudenet-service
 .venv/Scripts/python -m pytest
 ```
 
+The PDF redaction service likewise has its own Python test suite, which
+asserts the redacted text is actually gone from the content stream (not
+just visually covered), not merely that a response came back:
+
+```bash
+cd pdf-redact-service
+.venv/Scripts/pip install -r requirements-dev.txt
+.venv/Scripts/python -m pytest
+```
+
 ## S3 setup
 
 Shield expects an S3-compatible bucket (Railway object storage, or any
@@ -553,6 +580,35 @@ are marked safe with an audit note explaining that no scan applies, rather
 than silently skipping the check. If the service is unreachable, uploads
 still succeed (the file is already safely stored) but the evidence status
 falls back to `review` instead of `safe`.
+
+## PDF redaction setup
+
+Real in-place PDF redaction runs as a separate, self-hosted Python service
+(`pdf-redact-service/`, FastAPI + [PyMuPDF](https://pymupdf.readthedocs.io/)).
+Unlike the image-redaction path, which Go can do natively (OCR word boxes +
+`image/draw`), removing text from a PDF's actual content stream needs a
+real PDF-editing library — this service is that missing capability. It
+makes no policy decision about *what* to redact; the Go side already knows
+that from the accepted-PII review workflow and just sends the list of
+values.
+
+`POST /redact` (multipart `file` + `values` as a JSON array of strings)
+returns:
+
+```json
+{
+  "pdf_base64": "...",
+  "applied": { "jane@example.com": true, "555-1234": false }
+}
+```
+
+Every occurrence of every found value is genuinely removed from the
+content stream (via PyMuPDF's `add_redact_annot` + `apply_redactions`) and
+filled black — not an overlay a viewer could see through or a script could
+still extract text from. If the service is unreachable or errors, PDF
+redaction falls back to the original redacted-text-transcript approach
+(`internal/redaction/strategies.go`'s `redactTextTranscript`) rather than
+failing the request or silently including the file unredacted.
 
 ## OpenAI setup
 
@@ -699,17 +755,38 @@ check, doc updates, and a commit before moving on.
       (`internal/redaction`) that never modifies the original. Images get
       real pixel redaction — Tesseract word bounding boxes locate accepted
       values and a solid black box is drawn over their actual position, not
-      a placeholder blur. PDFs get a redacted text transcript, an explicitly
-      lesser (but honestly labeled) guarantee, since true in-place PDF
-      redaction needs a heavier PDF-editing stack this MVP doesn't include.
-      Verified live through the real Docker image (cgo Tesseract, not
-      mocked): accepted an email, rejected a phone number, generated a
-      redacted PNG, downloaded it, and visually confirmed the email was
-      precisely blacked out while the rejected phone number and everything
-      else remained untouched — screenshot-verified, not just an API
-      response check. The PDF transcript path and the full accept/reject/
-      manual-add/redact flow are additionally covered by an automated
-      integration test against real Postgres and S3.
+      a placeholder blur. Verified live through the real Docker image (cgo
+      Tesseract, not mocked): accepted an email, rejected a phone number,
+      generated a redacted PNG, downloaded it, and visually confirmed the
+      email was precisely blacked out while the rejected phone number and
+      everything else remained untouched — screenshot-verified, not just an
+      API response check. The full accept/reject/manual-add/redact flow is
+      additionally covered by an automated integration test against real
+      Postgres and S3.
+      **Follow-up — real in-place PDF redaction:** PDFs originally got a
+      redacted plain-text transcript instead of a redacted PDF, since
+      neither drawing a box over rendered text (still copy-pasteable
+      underneath — not real redaction) nor a paid/AGPL Go PDF library was a
+      good fit. Added `pdf-redact-service/` — a small Python/FastAPI
+      sidecar using [PyMuPDF](https://pymupdf.readthedocs.io/), which has
+      purpose-built redaction (`add_redact_annot` + `apply_redactions`)
+      that strips the underlying text/graphics from the content stream in
+      the located region and fills it black, not an overlay. The Go side
+      (`internal/pdfredact`) calls it the same way `internal/contentsafety`
+      calls NudeNet, and both the per-evidence redact flow and disclosure
+      package creation now produce a real `-redacted.pdf` when it's
+      configured, falling back to the original text-transcript approach if
+      it's unset or the call fails — the same graceful-degradation pattern
+      every other optional service in this app already uses, so one
+      dependency outage never means zero privacy protection. Verified live
+      through the real Docker image end to end: redacted a real PDF,
+      downloaded it, and confirmed with PyMuPDF's own text extraction that
+      the email and phone number were actually gone from the content
+      stream (not just visually covered) while every other field —
+      including the surrounding table layout — was untouched. Also covered
+      by Python unit tests (asserting the same "text actually gone"
+      property) and Go integration tests using a fake redactor for both the
+      success and service-failure/fallback paths.
 - [x] **Phase 7 — Controlled disclosure:** Safe Disclosure Packages
       (`internal/disclosure`) — a ZIP built with the Go standard library
       (`archive/zip`, `html/template`, no new dependency) containing a
