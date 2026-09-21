@@ -86,17 +86,3 @@ export async function apiUpload<T>(path: string, formData: FormData): Promise<T>
 
   return handleResponse<T>(res)
 }
-
-export interface HealthStatus {
-  status: string
-  database: string
-  version: string
-  time: string
-}
-
-export function getHealth() {
-  return fetch('/health').then((res) => {
-    if (!res.ok) throw new Error('Health check failed')
-    return res.json() as Promise<HealthStatus>
-  })
-}

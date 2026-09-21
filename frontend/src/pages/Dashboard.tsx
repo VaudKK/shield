@@ -1,16 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { FileStack, ShieldAlert, ShieldCheck, Send, Lock, AlertTriangle } from 'lucide-react'
 import { StatCard } from '@/components/StatCard'
-import { getHealth } from '@/lib/api'
 import { listEvidence } from '@/lib/evidence-api'
 import { listDisclosures } from '@/lib/disclosure-api'
 
 export function Dashboard() {
-  const { data: health } = useQuery({
-    queryKey: ['health'],
-    queryFn: getHealth,
-  })
-
   const {
     data: evidenceList,
     isLoading: evidenceLoading,
@@ -71,18 +65,6 @@ export function Dashboard() {
           value={statsLoading ? '—' : (disclosures?.length ?? 0)}
           icon={Send}
         />
-      </div>
-
-      <div className="mt-8 rounded-lg border border-shield-200 bg-white p-6">
-        <h2 className="mb-2 text-sm font-semibold text-shield-900">System status</h2>
-        <dl className="grid grid-cols-2 gap-y-2 text-sm sm:grid-cols-4">
-          <dt className="text-shield-500">API</dt>
-          <dd className="text-shield-900">{health?.status ?? 'checking…'}</dd>
-          <dt className="text-shield-500">Database</dt>
-          <dd className="text-shield-900">{health?.database ?? 'checking…'}</dd>
-          <dt className="text-shield-500">Version</dt>
-          <dd className="text-shield-900">{health?.version ?? '—'}</dd>
-        </dl>
       </div>
     </div>
   )
