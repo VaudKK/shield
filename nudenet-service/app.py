@@ -52,6 +52,7 @@ def get_detector() -> NudeDetector:
 class Detection(BaseModel):
     label: str
     score: float
+    box: list[float] | None = None
 
 
 class ClassifyResponse(BaseModel):
@@ -89,7 +90,14 @@ async def classify(file: UploadFile = File(...)) -> ClassifyResponse:
     finally:
         os.unlink(tmp.name)
 
-    labels = [Detection(label=d["class"], score=float(d["score"])) for d in raw_detections]
+    labels = [
+        Detection(
+            label=d["class"],
+            score=float(d["score"]),
+            box=[float(v) for v in d["box"]] if d.get("box") else None,
+        )
+        for d in raw_detections
+    ]
 
     sensitive_scores = [d.score for d in labels if d.label in SENSITIVE_LABELS]
     max_sensitive_score = max(sensitive_scores) if sensitive_scores else 0.0

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -23,6 +23,7 @@ import {
   getEvidence,
   getEvidenceAnalysis,
   getEvidenceAudit,
+  getEvidenceModeration,
   getEvidencePII,
   redactEvidence,
   reviewPII,
@@ -48,6 +49,8 @@ export function EvidenceDetail() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [revealed, setRevealed] = useState(false)
+  const [processingConfirmed, setProcessingConfirmed] = useState(false)
+  const autoAnalyzeTriggered = useRef(false)
 
   const {
     data: evidence,
@@ -85,6 +88,29 @@ export function EvidenceDetail() {
       queryClient.invalidateQueries({ queryKey: ['evidence', id, 'audit'] })
     },
   })
+
+  const needsWarning = evidence?.status === 'review' || evidence?.status === 'sensitive'
+
+  const { data: moderation } = useQuery({
+    queryKey: ['evidence', id, 'moderation'],
+    queryFn: () => getEvidenceModeration(id!),
+    enabled: !!id && needsWarning,
+    retry: false,
+  })
+
+  const notAnalyzedYet = analysisError instanceof ApiError && analysisError.code === 'ANALYSIS_NOT_FOUND'
+
+  // SAFE evidence continues to OCR/AI automatically — no click required.
+  // REVIEW/SENSITIVE evidence never auto-analyzes; it waits for the user to
+  // hit "Continue Processing" below.
+  useEffect(() => {
+    if (autoAnalyzeTriggered.current) return
+    if (!evidence || evidence.status !== 'safe') return
+    if (analysisLoading || !notAnalyzedYet || analysis) return
+    autoAnalyzeTriggered.current = true
+    analyzeMutation.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evidence, analysisLoading, notAnalyzedYet, analysis])
 
   const { data: piiItems } = useQuery({
     queryKey: ['evidence', id, 'pii'],
@@ -126,8 +152,6 @@ export function EvidenceDetail() {
     },
   })
 
-  const notAnalyzedYet = analysisError instanceof ApiError && analysisError.code === 'ANALYSIS_NOT_FOUND'
-
   if (evidenceErrored) {
     return (
       <div className="mx-auto max-w-3xl px-8 py-10">
@@ -159,8 +183,10 @@ export function EvidenceDetail() {
   const originalFile = evidence.files?.find((f) => f.kind === 'original')
   const redactedFiles = evidence.files?.filter((f) => f.kind === 'redacted') ?? []
   const isImage = originalFile?.mime_type.startsWith('image/')
-  const isSensitive = evidence.status === 'sensitive'
-  const canShowPreview = isImage && evidence.original_url && (!isSensitive || revealed)
+  const canShowPreview = isImage && evidence.original_url && (!needsWarning || revealed)
+  // Once analysis exists, processing already happened (this session or a
+  // previous one) — don't re-show the gate on reload.
+  const processingGateActive = needsWarning && !processingConfirmed && !analysis
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-10">
@@ -183,15 +209,13 @@ export function EvidenceDetail() {
         <StatusBadge status={evidence.status} />
       </div>
 
-      {isSensitive && !revealed && (
+      {needsWarning && !revealed && (
         <div className="mb-6 flex flex-col items-center gap-3 rounded-lg border border-status-sensitive/30 bg-orange-50 px-6 py-10 text-center">
           <ShieldAlert className="h-6 w-6 text-status-sensitive" strokeWidth={1.75} />
-          <p className="text-sm font-medium text-shield-900">
-            This file was flagged as potentially sensitive.
-          </p>
+          <p className="text-sm font-medium text-shield-900">Sensitive content detected</p>
           <p className="max-w-sm text-xs text-shield-500">
-            Sensitive content can itself be legitimate evidence, so Shield keeps it private and lets
-            you decide whether to view it — it is never deleted automatically.
+            This image appears to contain sensitive visual content. The original has been preserved
+            securely and is hidden from previews.
           </p>
           {isImage && evidence.original_url && (
             <button
@@ -200,8 +224,56 @@ export function EvidenceDetail() {
               className="mt-2 flex items-center gap-2 rounded-md border border-shield-300 bg-white px-3 py-2 text-sm font-medium text-shield-800 hover:bg-shield-50"
             >
               <Eye className="h-4 w-4" strokeWidth={1.75} />
-              Reveal image
+              Reveal Preview
             </button>
+          )}
+        </div>
+      )}
+
+      {processingGateActive && (
+        <div className="mb-6 rounded-lg border border-status-sensitive/30 bg-orange-50 px-6 py-6">
+          <p className="mb-1 text-sm font-medium text-shield-900">Processing paused</p>
+          <p className="mb-4 text-xs text-shield-500">
+            OCR and AI analysis won't run on this file until you choose to continue. Nothing has
+            been shared or deleted — this evidence stays private either way.
+          </p>
+          {moderation && moderation.labels.length > 0 && (
+            <p className="mb-4 text-xs text-shield-400">
+              Automated risk signal only, not a final decision — detected: {moderation.labels.join(', ')} (
+              {Math.round(moderation.confidence * 100)}% confidence).
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setProcessingConfirmed(true)
+                analyzeMutation.mutate()
+              }}
+              disabled={analyzeMutation.isPending}
+              className="rounded-md bg-shield-800 px-3 py-2 text-sm font-medium text-white hover:bg-shield-900 disabled:opacity-60"
+            >
+              {analyzeMutation.isPending ? 'Starting…' : 'Continue Processing'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Remove this evidence? This cannot be undone.')) {
+                  deleteMutation.mutate()
+                }
+              }}
+              disabled={deleteMutation.isPending}
+              className="rounded-md border border-status-rejected/30 px-3 py-2 text-sm font-medium text-status-rejected hover:bg-red-50 disabled:opacity-60"
+            >
+              {deleteMutation.isPending ? 'Removing…' : 'Remove File'}
+            </button>
+          </div>
+          {deleteMutation.isError && (
+            <p className="mt-2 text-sm text-status-rejected">
+              {deleteMutation.error instanceof ApiError
+                ? deleteMutation.error.message
+                : 'Could not remove this evidence. Please try again.'}
+            </p>
           )}
         </div>
       )}
@@ -233,7 +305,7 @@ export function EvidenceDetail() {
           This hash shows whether the stored file has changed since upload — it does not prove the
           underlying evidence itself is authentic.
         </p>
-        {evidence.original_url && (!isSensitive || revealed) && (
+        {evidence.original_url && (!needsWarning || revealed) && (
           <a
             href={evidence.original_url}
             target="_blank"
@@ -251,7 +323,7 @@ export function EvidenceDetail() {
             <Sparkles className="h-4 w-4 text-shield-500" strokeWidth={1.75} />
             AI Summary
           </h2>
-          {!analysisLoading && (
+          {!analysisLoading && !processingGateActive && (
             <button
               type="button"
               onClick={() => analyzeMutation.mutate()}
@@ -267,7 +339,14 @@ export function EvidenceDetail() {
           )}
         </div>
 
-        {analyzeMutation.isError && (
+        {processingGateActive && (
+          <p className="text-sm text-shield-400">
+            Waiting on the sensitive-content notice above — click "Continue Processing" there to
+            start OCR and AI analysis.
+          </p>
+        )}
+
+        {!processingGateActive && analyzeMutation.isError && (
           <p className="mb-3 text-sm text-status-rejected">
             {analyzeMutation.error instanceof ApiError
               ? analyzeMutation.error.message
@@ -275,17 +354,19 @@ export function EvidenceDetail() {
           </p>
         )}
 
-        {analysisLoading && <p className="text-sm text-shield-400">Loading…</p>}
+        {!processingGateActive && analysisLoading && <p className="text-sm text-shield-400">Loading…</p>}
 
-        {!analysisLoading && notAnalyzedYet && !analysis && (
+        {!processingGateActive && !analysisLoading && notAnalyzedYet && !analysis && (
           <p className="text-sm text-shield-400">
-            Not analyzed yet. Shield can extract text, generate a plain-language summary and
-            timeline, and flag possible personal information — nothing here determines whether an
-            incident occurred.
+            {evidence.status === 'safe'
+              ? 'Starting analysis automatically…'
+              : 'Not analyzed yet. Shield can extract text, generate a plain-language summary and ' +
+                'timeline, and flag possible personal information — nothing here determines whether ' +
+                'an incident occurred.'}
           </p>
         )}
 
-        {analysis && (
+        {!processingGateActive && analysis && (
           <>
             <p className="text-sm text-shield-800">{analysis.analysis.summary}</p>
 

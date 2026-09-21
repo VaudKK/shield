@@ -212,6 +212,54 @@ func (s *Server) handleEvidenceAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+type moderationResultResponse struct {
+	Status        string        `json:"status"`
+	Confidence    float64       `json:"confidence"`
+	Labels        []string      `json:"labels"`
+	BoundingBoxes []boundingBox `json:"bounding_boxes"`
+	CreatedAt     string        `json:"created_at"`
+}
+
+type boundingBox struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+func (s *Server) handleGetEvidenceModeration(w http.ResponseWriter, r *http.Request) {
+	user := UserFromContext(r.Context())
+
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "Invalid evidence ID.")
+		return
+	}
+
+	result, err := s.Evidence.Moderation(r.Context(), id, user.ID)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		writeError(w, http.StatusNotFound, "MODERATION_NOT_FOUND", "This evidence has no content-safety scan result.")
+		return
+	case err != nil:
+		s.Logger.Error("get evidence moderation failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Something went wrong. Please try again.")
+		return
+	}
+
+	boxes := make([]boundingBox, len(result.BoundingBox))
+	for i, b := range result.BoundingBox {
+		boxes[i] = boundingBox{X: b.X, Y: b.Y, Width: b.Width, Height: b.Height}
+	}
+	writeJSON(w, http.StatusOK, moderationResultResponse{
+		Status:        string(result.Status),
+		Confidence:    result.Confidence,
+		Labels:        result.Labels,
+		BoundingBoxes: boxes,
+		CreatedAt:     result.CreatedAt.Format(timeFormat),
+	})
+}
+
 // sanitizeFilename strips any directory components a browser or client
 // might send, keeping only the base name.
 func sanitizeFilename(name string) string {

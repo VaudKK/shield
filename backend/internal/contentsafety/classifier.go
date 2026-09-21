@@ -13,6 +13,10 @@ import "context"
 type Label struct {
 	Name  string
 	Score float64
+	// Box is the detection's location within the image, when the
+	// underlying service reports one. Not every detection has a box, so
+	// this is nil rather than a zero-value BoundingBox.
+	Box *BoundingBox
 }
 
 type Classification struct {

@@ -89,9 +89,10 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	var classifier contentsafety.Classifier
+	var moderator contentsafety.ModerationService
 	if cfg.NudeNetServiceURL != "" {
-		classifier = contentsafety.NewNudeNetClient(cfg.NudeNetServiceURL)
+		classifier := contentsafety.NewNudeNetClient(cfg.NudeNetServiceURL)
+		moderator = contentsafety.NewNudeNetModerationService(classifier, objectStorage)
 	} else {
 		logger.Warn("NUDENET_SERVICE_URL not set; uploaded images will stay quarantined pending manual review")
 	}
@@ -100,8 +101,9 @@ func run(logger *slog.Logger) error {
 		repository.NewEvidenceRepository(pool),
 		repository.NewEvidenceFileRepository(pool),
 		repository.NewAuditRepository(pool),
+		repository.NewModerationRepository(pool),
 		objectStorage,
-		classifier,
+		moderator,
 	)
 
 	ocrService := ocr.NewCompositeService(

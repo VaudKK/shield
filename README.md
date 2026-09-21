@@ -565,7 +565,8 @@ Implemented so far:
 | `GET` | `/api/v1/evidence/` | session | List your evidence |
 | `GET` | `/api/v1/evidence/:id` | session | Evidence detail, including a signed URL for the original |
 | `DELETE` | `/api/v1/evidence/:id` | session + CSRF | Soft-delete evidence |
-| `POST` | `/api/v1/evidence/:id/analyze` | session + CSRF, rate-limited | Run OCR → PII detection → AI analysis and persist the result |
+| `GET` | `/api/v1/evidence/:id/moderation` | session | Most recent content-safety scan: status, confidence, labels, bounding boxes (`404` if never scanned) |
+| `POST` | `/api/v1/evidence/:id/analyze` | session + CSRF, rate-limited | Run OCR → PII detection → AI analysis and persist the result (`409` if content-safety scanning hasn't finished yet) |
 | `GET` | `/api/v1/evidence/:id/analysis` | session | Most recent summary, gaps, timeline, and PII (`404` if not yet analyzed) |
 | `GET` | `/api/v1/evidence/:id/timeline` | session | Just the timeline |
 | `GET` | `/api/v1/evidence/:id/pii` | session | Just the detected PII |
@@ -636,6 +637,29 @@ check, doc updates, and a commit before moving on.
       failing the upload, and a PDF is marked `safe` with an audit note that
       content-safety scanning doesn't apply to it. The sensitive-content
       reveal gate was also driven through the actual browser UI.
+      **Follow-up — moderation as a first-class scan record:** classification
+      is now behind a `ModerationService` interface (`Scan(ctx, storageKey)`)
+      rather than being folded into evidence upload directly. The scan runs
+      against the *stored* original (fetched from object storage by key),
+      not an in-memory copy taken mid-upload, so the result always reflects
+      exactly what's on disk. Every scan — including its confidence score,
+      raw labels, and any bounding boxes NudeNet reports — is persisted to
+      its own `moderation_results` table (migration `0008`) linked to
+      `evidence_id`, independent of `evidence.status`, so a re-scan doesn't
+      erase what an earlier one found; `GET /evidence/{id}/moderation`
+      exposes the latest one. `review`/`sensitive` evidence now also gets a
+      backend-enforced processing gate: `POST /evidence/{id}/analyze`
+      refuses with `409 EVIDENCE_NOT_READY` while evidence is still
+      `quarantined` (scan not yet complete), and on the frontend, `safe`
+      evidence now continues to OCR/AI automatically with no click, while
+      `review`/`sensitive` evidence shows a dedicated "Sensitive content
+      detected" screen with **Reveal Preview**, **Continue Processing**, and
+      **Remove File** — OCR/AI never runs until the user explicitly
+      continues. Verified live through the real Docker stack (a plain image
+      auto-completes OCR/AI/PII with zero clicks) and via integration tests
+      against real Postgres and S3 using a fake moderator to exercise the
+      sensitive/review/scan-failure/quarantined-gate paths deterministically
+      (real nudity content isn't something to feed through a test suite).
 - [x] **Phase 5 — OCR & AI:** text extraction behind a common interface
       (`internal/ocr`) — real Tesseract via cgo for images, native Go PDF
       text extraction for documents — feeding an OpenAI Responses API call

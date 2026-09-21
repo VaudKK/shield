@@ -67,6 +67,13 @@ func (s *Service) Analyze(ctx context.Context, evidenceID, ownerID uuid.UUID) (*
 	if err != nil {
 		return nil, err
 	}
+	if ev.Status == domain.EvidenceStatusQuarantined {
+		// Content-safety scanning hasn't finished (or was never
+		// configured) for this evidence — running OCR/AI before that
+		// completes would skip the review/sensitive gate entirely, so
+		// refuse rather than silently proceeding.
+		return nil, domain.ErrEvidenceNotReady
+	}
 
 	files, err := s.files.ListByEvidence(ctx, ev.ID)
 	if err != nil {

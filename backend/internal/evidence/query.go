@@ -75,3 +75,13 @@ func (s *Service) AuditTrail(ctx context.Context, id, ownerID uuid.UUID) ([]doma
 	}
 	return s.audit.ListByEvidence(ctx, id)
 }
+
+// Moderation returns the most recent content-safety scan for a piece of
+// evidence owned by ownerID, or domain.ErrNotFound if it was never scanned
+// (e.g. a PDF, or content-safety scanning wasn't configured).
+func (s *Service) Moderation(ctx context.Context, id, ownerID uuid.UUID) (*domain.ModerationResult, error) {
+	if _, err := s.evidence.GetByIDForOwner(ctx, id, ownerID); err != nil {
+		return nil, err
+	}
+	return s.moderation.GetLatestByEvidence(ctx, id)
+}

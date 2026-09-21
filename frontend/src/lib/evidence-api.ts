@@ -124,3 +124,22 @@ export interface RedactionResult {
 export function redactEvidence(id: string) {
   return apiFetch<RedactionResult>(`/evidence/${id}/redact`, { method: 'POST' })
 }
+
+export interface ModerationBoundingBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface ModerationResult {
+  status: 'safe' | 'review' | 'sensitive'
+  confidence: number
+  labels: string[]
+  bounding_boxes: ModerationBoundingBox[]
+  created_at: string
+}
+
+export function getEvidenceModeration(id: string) {
+  return apiFetch<ModerationResult>(`/evidence/${id}/moderation`)
+}

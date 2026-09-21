@@ -67,8 +67,9 @@ func newEvidenceTestServer(t *testing.T) *httpapi.Server {
 		repository.NewEvidenceRepository(base.Pool),
 		repository.NewEvidenceFileRepository(base.Pool),
 		repository.NewAuditRepository(base.Pool),
+		repository.NewModerationRepository(base.Pool),
 		store,
-		nil, // no content-safety classifier in this test; covered separately in internal/contentsafety
+		nil, // no content-safety moderator in this test; covered separately in internal/contentsafety
 	)
 
 	return base

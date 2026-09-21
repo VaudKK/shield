@@ -120,6 +120,9 @@ func (s *Server) handleAnalyzeEvidence(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(w, http.StatusNotFound, "EVIDENCE_NOT_FOUND", "Evidence could not be found.")
 		return
+	case errors.Is(err, domain.ErrEvidenceNotReady):
+		writeError(w, http.StatusConflict, "EVIDENCE_NOT_READY", "This evidence hasn't finished its content-safety scan yet.")
+		return
 	case err != nil:
 		s.Logger.Error("analyze evidence failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "ANALYSIS_FAILED", "Analysis failed. Please try again.")

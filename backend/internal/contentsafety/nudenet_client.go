@@ -25,8 +25,9 @@ func NewNudeNetClient(baseURL string) *NudeNetClient {
 
 type classifyResponse struct {
 	Labels []struct {
-		Label string  `json:"label"`
-		Score float64 `json:"score"`
+		Label string    `json:"label"`
+		Score float64   `json:"score"`
+		Box   []float64 `json:"box,omitempty"` // [x, y, width, height], when reported
 	} `json:"labels"`
 	Sensitive         bool    `json:"sensitive"`
 	MaxSensitiveScore float64 `json:"max_sensitive_score"`
@@ -71,7 +72,11 @@ func (c *NudeNetClient) Classify(ctx context.Context, imageBytes []byte, filenam
 
 	labels := make([]Label, len(parsed.Labels))
 	for i, l := range parsed.Labels {
-		labels[i] = Label{Name: l.Label, Score: l.Score}
+		lbl := Label{Name: l.Label, Score: l.Score}
+		if len(l.Box) == 4 {
+			lbl.Box = &BoundingBox{X: l.Box[0], Y: l.Box[1], Width: l.Box[2], Height: l.Box[3]}
+		}
+		labels[i] = lbl
 	}
 
 	return &Classification{

@@ -94,6 +94,7 @@ func (s *Server) Router() http.Handler {
 			r.With(rateLimit(s.UploadRateLimiter, "UPLOAD_RATE_LIMITED"), requireCSRF).Post("/", s.handleUploadEvidence)
 			r.Get("/{id}", s.handleGetEvidence)
 			r.With(requireCSRF).Delete("/{id}", s.handleDeleteEvidence)
+			r.Get("/{id}/moderation", s.handleGetEvidenceModeration)
 
 			r.With(rateLimit(s.AnalysisRateLimiter, "ANALYSIS_RATE_LIMITED"), requireCSRF).Post("/{id}/analyze", s.handleAnalyzeEvidence)
 			r.Get("/{id}/analysis", s.handleGetEvidenceAnalysis)
