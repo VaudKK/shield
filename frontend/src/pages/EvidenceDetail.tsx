@@ -49,7 +49,12 @@ export function EvidenceDetail() {
   const queryClient = useQueryClient()
   const [revealed, setRevealed] = useState(false)
 
-  const { data: evidence, isLoading } = useQuery({
+  const {
+    data: evidence,
+    isLoading,
+    isError: evidenceErrored,
+    error: evidenceError,
+  } = useQuery({
     queryKey: ['evidence', id],
     queryFn: () => getEvidence(id!),
     enabled: !!id,
@@ -122,6 +127,26 @@ export function EvidenceDetail() {
   })
 
   const notAnalyzedYet = analysisError instanceof ApiError && analysisError.code === 'ANALYSIS_NOT_FOUND'
+
+  if (evidenceErrored) {
+    return (
+      <div className="mx-auto max-w-3xl px-8 py-10">
+        <button
+          type="button"
+          onClick={() => navigate('/dashboard/evidence')}
+          className="mb-6 flex items-center gap-1 text-sm text-shield-500 hover:text-shield-800"
+        >
+          <ArrowLeft className="h-4 w-4" strokeWidth={1.75} />
+          Back to evidence
+        </button>
+        <p className="text-sm text-status-rejected">
+          {evidenceError instanceof ApiError
+            ? evidenceError.message
+            : 'Could not load this evidence. Please try again.'}
+        </p>
+      </div>
+    )
+  }
 
   if (isLoading || !evidence) {
     return (
@@ -442,6 +467,13 @@ export function EvidenceDetail() {
         <Trash2 className="h-4 w-4" strokeWidth={1.75} />
         {deleteMutation.isPending ? 'Removing…' : 'Remove evidence'}
       </button>
+      {deleteMutation.isError && (
+        <p className="mt-2 text-sm text-status-rejected">
+          {deleteMutation.error instanceof ApiError
+            ? deleteMutation.error.message
+            : 'Could not remove this evidence. Please try again.'}
+        </p>
+      )}
     </div>
   )
 }

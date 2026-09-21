@@ -12,6 +12,7 @@ import { CreateDisclosure } from '@/pages/CreateDisclosure'
 import { Login } from '@/pages/Login'
 import { Register } from '@/pages/Register'
 import { Placeholder } from '@/pages/Placeholder'
+import { NotFound } from '@/pages/NotFound'
 
 function App() {
   return (
@@ -57,6 +58,8 @@ function App() {
           />
         </Route>
       </Route>
+
+      <Route path="*" element={<NotFound />} />
     </Routes>
   )
 }

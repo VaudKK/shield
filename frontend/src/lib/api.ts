@@ -51,7 +51,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     if (csrf) headers['X-CSRF-Token'] = csrf
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithNetworkErrorHandling(`${API_BASE}${path}`, {
     credentials: 'include',
     ...init,
     headers,
@@ -60,13 +60,24 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return handleResponse<T>(res)
 }
 
+// Distinguishes "the server responded with an error" (handled above via
+// ApiError) from "the request never reached the server" (offline, DNS
+// failure, CORS), which fetch() surfaces as a generic TypeError.
+async function fetchWithNetworkErrorHandling(input: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init)
+  } catch {
+    throw new ApiError(0, 'NETWORK_ERROR', 'Could not reach Shield. Check your connection and try again.')
+  }
+}
+
 // apiUpload is a separate path from apiFetch because file uploads use
 // multipart/form-data, where the browser must set the Content-Type
 // (including its boundary) itself.
 export async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
   const csrf = getCookie('shield_csrf')
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithNetworkErrorHandling(`${API_BASE}${path}`, {
     method: 'POST',
     credentials: 'include',
     headers: csrf ? { 'X-CSRF-Token': csrf } : undefined,

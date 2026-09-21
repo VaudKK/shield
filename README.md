@@ -689,7 +689,23 @@ check, doc updates, and a commit before moving on.
       (evidence selection, toggles, package creation, download, list view),
       and covered by an automated integration test against real Postgres
       and S3 that inspects the actual ZIP contents.
-- [ ] Phase 8 — Polish
+- [x] **Phase 8 — Polish:** UI/UX and error-handling pass over the frontend
+      shell rather than any one feature. Added a top-level React error
+      boundary (`components/ErrorBoundary.tsx`) so an unhandled render
+      error shows a recovery screen instead of a white page, plus a
+      catch-all 404 route (`pages/NotFound.tsx`). Made the dashboard stats
+      distinguish loading/error/empty instead of silently showing `0`
+      while still fetching or on a failed request. Fixed evidence detail
+      getting stuck on "Loading…" forever when the fetch itself errored
+      (e.g. evidence from another vault), and added a previously-missing
+      error message on the delete-evidence action. Gave `apiFetch`/
+      `apiUpload` a distinct "Could not reach Shield" message for actual
+      network failures (offline, DNS) instead of the generic fallback.
+      Made the dashboard shell responsive below `lg`: the fixed 256px
+      sidebar becomes an off-canvas panel behind a hamburger/top bar,
+      with an overlay and outside-click/nav-click to close, verified live
+      at a 375×812 mobile viewport. Also added one-click copy buttons for
+      the Vault ID and Recovery Key on the vault-creation screen.
 - [ ] Phase 9 — Testing & hardening
 - [ ] Phase 10 — Hackathon demo
 

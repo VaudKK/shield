@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { FileStack, ShieldAlert, ShieldCheck, Send, Lock } from 'lucide-react'
+import { FileStack, ShieldAlert, ShieldCheck, Send, Lock, AlertTriangle } from 'lucide-react'
 import { StatCard } from '@/components/StatCard'
 import { getHealth } from '@/lib/api'
 import { listEvidence } from '@/lib/evidence-api'
@@ -11,18 +11,28 @@ export function Dashboard() {
     queryFn: getHealth,
   })
 
-  const { data: evidenceList } = useQuery({
+  const {
+    data: evidenceList,
+    isLoading: evidenceLoading,
+    isError: evidenceErrored,
+  } = useQuery({
     queryKey: ['evidence'],
     queryFn: listEvidence,
   })
 
-  const { data: disclosures } = useQuery({
+  const {
+    data: disclosures,
+    isLoading: disclosuresLoading,
+    isError: disclosuresErrored,
+  } = useQuery({
     queryKey: ['disclosures'],
     queryFn: listDisclosures,
   })
 
   const reviewCount = evidenceList?.filter((e) => e.status === 'review').length ?? 0
   const safeCount = evidenceList?.filter((e) => e.status === 'safe').length ?? 0
+  const statsLoading = evidenceLoading || disclosuresLoading
+  const statsErrored = evidenceErrored || disclosuresErrored
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-10">
@@ -40,11 +50,27 @@ export function Dashboard() {
         Original evidence is preserved privately. You control what gets disclosed.
       </div>
 
+      {statsErrored && (
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-status-rejected/30 bg-red-50 px-4 py-3 text-sm text-status-rejected">
+          <AlertTriangle className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+          Some stats couldn't be loaded. Try refreshing the page.
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Evidence" value={evidenceList?.length ?? 0} icon={FileStack} />
-        <StatCard label="Needs Review" value={reviewCount} icon={ShieldAlert} tone="warning" />
-        <StatCard label="Protected" value={safeCount} icon={ShieldCheck} tone="success" />
-        <StatCard label="Disclosure Packages" value={disclosures?.length ?? 0} icon={Send} />
+        <StatCard label="Evidence" value={statsLoading ? '—' : (evidenceList?.length ?? 0)} icon={FileStack} />
+        <StatCard
+          label="Needs Review"
+          value={statsLoading ? '—' : reviewCount}
+          icon={ShieldAlert}
+          tone="warning"
+        />
+        <StatCard label="Protected" value={statsLoading ? '—' : safeCount} icon={ShieldCheck} tone="success" />
+        <StatCard
+          label="Disclosure Packages"
+          value={statsLoading ? '—' : (disclosures?.length ?? 0)}
+          icon={Send}
+        />
       </div>
 
       <div className="mt-8 rounded-lg border border-shield-200 bg-white p-6">

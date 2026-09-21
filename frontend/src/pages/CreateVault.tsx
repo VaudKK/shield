@@ -1,9 +1,46 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ShieldCheck, AlertTriangle } from 'lucide-react'
+import { ShieldCheck, AlertTriangle, Copy, Check } from 'lucide-react'
 import { useCreateVault } from '@/hooks/useAuth'
 import { ApiError } from '@/lib/api'
 import type { CreateVaultResult } from '@/lib/vault-api'
+
+function CopyableField({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard access denied or unavailable; the value is still selectable.
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-wide text-shield-500">{label}</p>
+      <div className="mt-1 flex items-stretch gap-2">
+        <p className="flex-1 overflow-x-auto rounded-md bg-shield-50 px-3 py-2 font-mono text-sm text-shield-950">
+          {value}
+        </p>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={`Copy ${label}`}
+          className="flex shrink-0 items-center justify-center rounded-md border border-shield-200 bg-white px-2.5 text-shield-600 transition-colors hover:border-shield-400 hover:text-shield-900"
+        >
+          {copied ? (
+            <Check className="h-4 w-4 text-status-approved" strokeWidth={1.75} />
+          ) : (
+            <Copy className="h-4 w-4" strokeWidth={1.75} />
+          )}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 export function CreateVault() {
   const navigate = useNavigate()
@@ -53,18 +90,8 @@ export function CreateVault() {
         <h1 className="text-lg font-semibold text-shield-950">Your secure vault is ready</h1>
 
         <div className="mt-4 space-y-3">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-shield-500">Vault ID</p>
-            <p className="mt-1 rounded-md bg-shield-50 px-3 py-2 font-mono text-sm text-shield-950">
-              {result.vault_id}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-shield-500">Recovery Key</p>
-            <p className="mt-1 rounded-md bg-shield-50 px-3 py-2 font-mono text-sm text-shield-950">
-              {result.recovery_key}
-            </p>
-          </div>
+          <CopyableField label="Vault ID" value={result.vault_id} />
+          <CopyableField label="Recovery Key" value={result.recovery_key} />
         </div>
 
         <div className="mt-4 flex items-start gap-2 rounded-md border border-status-review/30 bg-amber-50 px-3 py-2.5 text-xs text-shield-700">
