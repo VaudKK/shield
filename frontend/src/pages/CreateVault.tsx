@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ShieldCheck, AlertTriangle, Copy, Check } from 'lucide-react'
 import { useCreateVault } from '@/hooks/useAuth'
@@ -47,10 +47,18 @@ export function CreateVault() {
   const createMutation = useCreateVault()
   const [result, setResult] = useState<CreateVaultResult | null>(null)
   const [confirmed, setConfirmed] = useState(false)
+  // A ref, not mutation/component state: React 19 + StrictMode invokes
+  // this effect twice on mount in dev, synchronously, before either call's
+  // state (isPending, result) has had a chance to update — a state-based
+  // guard doesn't see the first call in time and lets a second vault get
+  // created. A real, once-created-then-true ref is checked and set
+  // synchronously, so the second invocation reliably no-ops.
+  const requested = useRef(false)
 
   // Create the vault once, on mount.
   useEffect(() => {
-    if (result || createMutation.isPending || createMutation.isError) return
+    if (requested.current) return
+    requested.current = true
     createMutation.mutate(undefined, { onSuccess: setResult })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
