@@ -30,6 +30,14 @@ var (
 	// phone numbers.
 	isoDateRe = regexp.MustCompile(`^\d{4}[.\-/]\d{2}[.\-/]\d{2}$`)
 
+	// A decimal point directly between digits (212.25, -0.84) is a strong
+	// signal of a price, percentage, or other decimal number, not a phone
+	// number — real phone numbers don't use "." as a fractional separator.
+	// This is what tabular numeric data (stock tables, spreadsheets: rows
+	// of space-separated decimal columns) was matching the loose phone
+	// pattern on before this exclusion existed.
+	decimalPointRe = regexp.MustCompile(`\d\.\d`)
+
 	// A run of 9+ digits with no separators, which commonly indicates an ID,
 	// account, or reference number. Labeled conservatively as
 	// "possible_id_number" rather than a specific ID type, since the format
@@ -63,7 +71,8 @@ func Detect(text string) []Detection {
 		add("email", loc)
 	}
 	for _, loc := range phoneRe.FindAllStringIndex(text, -1) {
-		if isoDateRe.MatchString(text[loc[0]:loc[1]]) {
+		matched := text[loc[0]:loc[1]]
+		if isoDateRe.MatchString(matched) || decimalPointRe.MatchString(matched) {
 			continue
 		}
 		add("phone_number", loc)

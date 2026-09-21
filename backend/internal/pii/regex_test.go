@@ -55,6 +55,21 @@ func TestDetect_DateNotMisreportedAsPhone(t *testing.T) {
 	}
 }
 
+func TestDetect_DecimalTableNumbersNotMisreportedAsPhone(t *testing.T) {
+	// A stock/spreadsheet table row OCR'd as plain text: 52-week high/low
+	// prices and a last/change column, all decimal numbers separated by
+	// whitespace. Previously matched the loose phone pattern since it's
+	// just digits with separators in the right length range.
+	text := "212.25 131.03 BiotechT 204.66 -0.84\n68.88 50.65 Biosite 50.05 -4.57"
+	got := Detect(text)
+
+	for _, d := range got {
+		if d.Type == "phone_number" {
+			t.Errorf("expected decimal table numbers not to be detected as a phone number, got %+v", d)
+		}
+	}
+}
+
 func TestDetect_NoFalsePositivesOnPlainText(t *testing.T) {
 	text := "This is a short note with no personal information in it at all."
 	got := Detect(text)
