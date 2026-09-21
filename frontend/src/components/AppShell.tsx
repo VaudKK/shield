@@ -1,27 +1,13 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import {
-  ShieldCheck,
-  LayoutDashboard,
-  FileStack,
-  History,
-  Send,
-  Activity,
-  Settings,
-  LogOut,
-  Menu,
-  X,
-} from 'lucide-react'
+import { ShieldCheck, LayoutDashboard, FileStack, Send, LogOut, Menu, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCurrentUser, useLogout } from '@/hooks/useAuth'
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/dashboard/evidence', label: 'Evidence', icon: FileStack },
-  { to: '/dashboard/timeline', label: 'Timeline', icon: History },
   { to: '/dashboard/disclosures', label: 'Disclosures', icon: Send },
-  { to: '/dashboard/activity', label: 'Activity', icon: Activity },
-  { to: '/dashboard/settings', label: 'Settings', icon: Settings },
 ]
 
 export function AppShell() {

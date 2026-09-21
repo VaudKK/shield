@@ -11,7 +11,6 @@ import { Disclosures } from '@/pages/Disclosures'
 import { CreateDisclosure } from '@/pages/CreateDisclosure'
 import { Login } from '@/pages/Login'
 import { Register } from '@/pages/Register'
-import { Placeholder } from '@/pages/Placeholder'
 import { NotFound } from '@/pages/NotFound'
 
 function App() {
@@ -32,30 +31,8 @@ function App() {
           <Route index element={<Dashboard />} />
           <Route path="evidence" element={<Evidence />} />
           <Route path="evidence/:id" element={<EvidenceDetail />} />
-          <Route
-            path="timeline"
-            element={
-              <Placeholder
-                title="Timeline"
-                description="A chronological view of events across your evidence."
-              />
-            }
-          />
           <Route path="disclosures" element={<Disclosures />} />
           <Route path="disclosures/new" element={<CreateDisclosure />} />
-          <Route
-            path="activity"
-            element={
-              <Placeholder
-                title="Activity"
-                description="An append-only audit trail of everything that happened."
-              />
-            }
-          />
-          <Route
-            path="settings"
-            element={<Placeholder title="Settings" description="Manage your account and preferences." />}
-          />
         </Route>
       </Route>
 
