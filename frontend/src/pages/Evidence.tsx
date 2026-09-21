@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { UploadCloud, FileStack, Lock } from 'lucide-react'
-import { listEvidence, uploadEvidence, type Evidence as EvidenceRecord } from '@/lib/evidence-api'
+import { UploadCloud, FileStack, Lock, Sparkles } from 'lucide-react'
+import { analyzeEvidence, listEvidence, uploadEvidence, type Evidence as EvidenceRecord } from '@/lib/evidence-api'
 import { ApiError } from '@/lib/api'
 import { StatusBadge } from '@/components/StatusBadge'
 import { cn } from '@/lib/utils'
@@ -20,9 +20,25 @@ export function Evidence() {
 
   const uploadMutation = useMutation({
     mutationFn: ({ file, title }: { file: File; title: string }) => uploadEvidence(file, title),
-    onSuccess: () => {
+    onSuccess: (uploaded) => {
       queryClient.invalidateQueries({ queryKey: ['evidence'] })
       setPendingTitle('')
+
+      // "Safe" evidence continues to OCR/AI automatically — the user
+      // shouldn't have to know that opening the detail page is what
+      // starts it. review/sensitive evidence still waits for an explicit
+      // "Continue Processing" click (see EvidenceDetail's processing
+      // gate), so it's deliberately not auto-analyzed here.
+      if (uploaded.status === 'safe') {
+        analyzeEvidence(uploaded.id)
+          .catch(() => {
+            // Best-effort: if this fails, the detail page's own
+            // auto-analyze effect (or a manual re-analyze) will retry it.
+          })
+          .finally(() => {
+            queryClient.invalidateQueries({ queryKey: ['evidence'] })
+          })
+      }
     },
   })
 
@@ -118,6 +134,9 @@ export function Evidence() {
 }
 
 function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
+  const needsWarning = evidence.status === 'review' || evidence.status === 'sensitive'
+  const analyzing = !evidence.analyzed && evidence.status === 'safe'
+
   return (
     <li>
       <Link
@@ -128,9 +147,19 @@ function EvidenceCard({ evidence }: { evidence: EvidenceRecord }) {
           <p className="truncate text-sm font-medium text-shield-950">{evidence.title}</p>
           <StatusBadge status={evidence.status} />
         </div>
-        <p className="text-xs text-shield-400">
+        <p className="mb-2 text-xs text-shield-400">
           {new Date(evidence.created_at).toLocaleString()}
         </p>
+        {!evidence.analyzed && (
+          <p className="flex items-center gap-1 text-xs font-medium text-status-review">
+            <Sparkles className="h-3 w-3 shrink-0" strokeWidth={1.75} />
+            {analyzing
+              ? 'Analyzing…'
+              : needsWarning
+                ? 'Click to review and continue processing'
+                : 'Not analyzed — click to analyze'}
+          </p>
+        )}
       </Link>
     </li>
   )
