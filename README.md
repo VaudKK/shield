@@ -241,7 +241,7 @@ Errors use a consistent envelope: `{"error": {"code": "...", "message": "..."}}`
 - [x] Phase 7 — Controlled disclosure (+ face blurring)
 - [x] Phase 8 — UI/UX polish
 - [ ] Phase 9 — Testing & hardening
-- [ ] Phase 10 — Hackathon demo
+- [x] Phase 10 — Hackathon demo
 
 ## Future improvements
 
